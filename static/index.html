@@ -24,12 +24,6 @@
             </div>
         </div>
 
-        <!-- Sessions List -->
-        <div class="session-list">
-            <h3>Recent Sessions</h3>
-            <div id="sessions-list">Loading...</div>
-        </div>
-
         <!-- Correction Interface -->
         <div id="correction-section" class="hidden">
             <div class="controls">
@@ -61,40 +55,33 @@
                 
                 <div class="text-panel">
                     <div class="sidebar-section">
-                        <h3>Navigation Controls</h3>
-                        <div class="navigation-help">
-                            <strong>Keyboard Shortcuts:</strong><br>
-                            • <kbd>Tab</kbd> - Next word<br>
-                            • <kbd>Shift+Tab</kbd> - Previous word<br>
-                            • <kbd>Enter</kbd> - Apply changes<br>
-                            • <kbd>Delete</kbd> - Delete selected word<br>
-                            • <kbd>D</kbd> - Toggle drawing mode<br>
-                            • <kbd>Esc</kbd> - Clear selection/Exit drawing
-                        </div>
-                        <div class="word-counter" id="word-counter">
-                            Word 0 of 0
-                        </div>
-                    </div>
-
-                    <div class="sidebar-section">
-                        <h3>Selected Word</h3>
-                        <div class="word-editor" id="word-editor" style="display: none;">
-                            <h4 id="word-id">No word selected</h4>
-                            <input type="text" class="word-input" id="word-text" placeholder="Edit word text..." oninput="updateSelectedWord()">
-                            <div style="margin-top: 10px; font-size: 12px; color: #9ca3af;">
-                                <div>Confidence: <span id="word-confidence"></span></div>
-                                <div>Bbox: <span id="word-bbox"></span></div>
+                        <h3>Line Editor</h3>
+                        <div id="line-editor" style="display: none;">
+                            <div class="line-info">
+                                <span id="line-counter">Line 0 of 0</span>
+                                <div class="line-navigation">
+                                    <button class="btn-small" onclick="navigateToLineAbove()">↑ Prev Line</button>
+                                    <button class="btn-small" onclick="navigateToLineBelow()">↓ Next Line</button>
+                                </div>
+                            </div>
+                            <div class="line-text-editor">
+                                <textarea id="line-text-area" class="line-textarea" placeholder="Line text will appear here..." oninput="updateLineText()"></textarea>
+                                <div class="line-words" id="line-words">
+                                    <!-- Individual word buttons will appear here -->
+                                </div>
+                            </div>
+                            <div class="line-stats">
+                                <span>Words: <span id="line-word-count">0</span></span>
+                                <span>Avg Conf: <span id="line-avg-confidence">0%</span></span>
                             </div>
                         </div>
+                        
+                       
                         <div id="no-selection" style="color: #6b7280; font-style: italic;">
-                            Click on a word in the image to edit it, or use Tab to navigate
+                            Click on a line in the image to edit it, or use arrow keys to navigate
                         </div>
                     </div>
 
-                    <div class="sidebar-section">
-                        <h3>hOCR Source</h3>
-                        <textarea class="hocr-editor" id="hocr-editor" oninput="updateHOCRFromSource()" placeholder="hOCR XML will appear here..."></textarea>
-                    </div>
 
                     <div class="sidebar-section">
                         <h3>Actions</h3>
@@ -107,6 +94,23 @@
                         <button class="btn btn-danger" onclick="deleteSelectedWord()" style="width: 100%;">
                             Delete Selected Word
                         </button>
+                    </div>
+                    <div class="sidebar-section">
+                        <h3>Navigation Controls</h3>
+                        <div class="navigation-help">
+                            <strong>Keyboard Shortcuts:</strong><br>
+                            • <kbd>Tab</kbd> / <kbd>→</kbd> - Next word<br>
+                            • <kbd>Shift+Tab</kbd> / <kbd>←</kbd> - Previous word<br>
+                            • <kbd>↑</kbd> - Line above<br>
+                            • <kbd>↓</kbd> - Line below<br>
+                            • <kbd>Enter</kbd> - Apply changes<br>
+                            • <kbd>Delete</kbd> - Delete selected word<br>
+                            • <kbd>D</kbd> - Toggle drawing mode<br>
+                            • <kbd>Esc</kbd> - Clear selection/Exit drawing
+                        </div>
+                        <div class="word-counter" id="word-counter">
+                            Word 0 of 0
+                        </div>
                     </div>
                 </div>
             </div>
@@ -141,7 +145,11 @@
                 </div>
             </div>
         </div>
-
+        <!-- Sessions List -->
+        <div class="session-list">
+            <h3>Recent Sessions</h3>
+            <div id="sessions-list">Loading...</div>
+        </div>
         <!-- Annotation Modal -->
         <div id="annotation-modal" class="annotation-modal hidden">
             <div class="annotation-dialog">

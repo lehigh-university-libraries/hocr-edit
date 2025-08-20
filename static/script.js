@@ -3,7 +3,10 @@ let currentImageIndex = 0;
 let hocrData = null;
 let selectedWordId = null;
 let currentWordIndex = -1;
-let wordNavigationOrder = [];
+let currentLineWords = [];
+let currentLineId = null;
+let allLines = [];
+let currentLineIndex = -1;
 let imageScale = 1;
 let showLowConfidence = false;
 
@@ -61,6 +64,22 @@ document.addEventListener('keydown', function(e) {
                 e.preventDefault();
                 toggleDrawingMode();
             }
+            break;
+        case 'ArrowUp':
+            e.preventDefault();
+            navigateToLineAbove();
+            break;
+        case 'ArrowDown':
+            e.preventDefault();
+            navigateToLineBelow();
+            break;
+        case 'ArrowLeft':
+            e.preventDefault();
+            navigateToPreviousWord();
+            break;
+        case 'ArrowRight':
+            e.preventDefault();
+            navigateToNextWord();
             break;
     }
 });
@@ -322,6 +341,22 @@ function closeAnnotationModal() {
 function navigateToNextWord() {
     if (!hocrData || !hocrData.words || hocrData.words.length === 0) return;
     
+    // If we have line context and we're not at the last word in the line,
+    // navigate within the line first
+    if (currentLineWords.length > 0 && selectedWordId) {
+        const currentWordIndexInLine = currentLineWords.findIndex(w => w.id === selectedWordId);
+        if (currentWordIndexInLine !== -1 && currentWordIndexInLine < currentLineWords.length - 1) {
+            // Move to next word in same line
+            const nextWord = currentLineWords[currentWordIndexInLine + 1];
+            const globalIndex = hocrData.words.findIndex(w => w.id === nextWord.id);
+            currentWordIndex = globalIndex;
+            selectWord(nextWord.id);
+            scrollWordIntoView();
+            return;
+        }
+    }
+    
+    // Normal global navigation
     currentWordIndex = (currentWordIndex + 1) % hocrData.words.length;
     selectWordByIndex(currentWordIndex);
     scrollWordIntoView();
@@ -330,6 +365,22 @@ function navigateToNextWord() {
 function navigateToPreviousWord() {
     if (!hocrData || !hocrData.words || hocrData.words.length === 0) return;
     
+    // If we have line context and we're not at the first word in the line,
+    // navigate within the line first
+    if (currentLineWords.length > 0 && selectedWordId) {
+        const currentWordIndexInLine = currentLineWords.findIndex(w => w.id === selectedWordId);
+        if (currentWordIndexInLine > 0) {
+            // Move to previous word in same line
+            const prevWord = currentLineWords[currentWordIndexInLine - 1];
+            const globalIndex = hocrData.words.findIndex(w => w.id === prevWord.id);
+            currentWordIndex = globalIndex;
+            selectWord(prevWord.id);
+            scrollWordIntoView();
+            return;
+        }
+    }
+    
+    // Normal global navigation
     currentWordIndex = currentWordIndex <= 0 ? hocrData.words.length - 1 : currentWordIndex - 1;
     selectWordByIndex(currentWordIndex);
     scrollWordIntoView();
@@ -352,22 +403,48 @@ function selectWordByIndex(index) {
     }, 100);
 }
 
-function scrollWordIntoView() {
-    if (!selectedWordId) return;
+function navigateToLineAbove() {
+    if (!allLines || allLines.length === 0 || currentLineIndex <= 0) return;
     
-    const wordBox = document.getElementById('box-' + selectedWordId);
-    if (wordBox) {
+    // Navigate to previous line
+    currentLineIndex--;
+    const targetLine = allLines[currentLineIndex];
+    
+    if (targetLine && targetLine.words.length > 0) {
+        selectLine(targetLine.id, currentLineIndex);
+        scrollLineIntoView();
+    }
+}
+
+function navigateToLineBelow() {
+    if (!allLines || allLines.length === 0 || currentLineIndex >= allLines.length - 1) return;
+    
+    // Navigate to next line
+    currentLineIndex++;
+    const targetLine = allLines[currentLineIndex];
+    
+    if (targetLine && targetLine.words.length > 0) {
+        selectLine(targetLine.id, currentLineIndex);
+        scrollLineIntoView();
+    }
+}
+
+function scrollLineIntoView() {
+    if (!currentLineId) return;
+    
+    const lineBox = document.getElementById('line-box-' + currentLineId);
+    if (lineBox) {
         const imageContainer = document.getElementById('image-container');
         const containerRect = imageContainer.getBoundingClientRect();
-        const wordRect = wordBox.getBoundingClientRect();
+        const lineRect = lineBox.getBoundingClientRect();
         
-        // Check if word is outside visible area
-        if (wordRect.top < containerRect.top || wordRect.bottom > containerRect.bottom ||
-            wordRect.left < containerRect.left || wordRect.right > containerRect.right) {
+        // Check if line is outside visible area
+        if (lineRect.top < containerRect.top || lineRect.bottom > containerRect.bottom ||
+            lineRect.left < containerRect.left || lineRect.right > containerRect.right) {
             
-            // Calculate scroll position to center the word
-            const scrollTop = imageContainer.scrollTop + wordRect.top - containerRect.top - (containerRect.height / 2);
-            const scrollLeft = imageContainer.scrollLeft + wordRect.left - containerRect.left - (containerRect.width / 2);
+            // Calculate scroll position to center the line
+            const scrollTop = imageContainer.scrollTop + lineRect.top - containerRect.top - (containerRect.height / 2);
+            const scrollLeft = imageContainer.scrollLeft + lineRect.left - containerRect.left - (containerRect.width / 2);
             
             imageContainer.scrollTo({
                 top: Math.max(0, scrollTop),
@@ -376,6 +453,11 @@ function scrollWordIntoView() {
             });
         }
     }
+}
+
+// Keep the old function name for compatibility but redirect to line scrolling
+function scrollWordIntoView() {
+    scrollLineIntoView();
 }
 
 function updateWordCounter() {
@@ -390,12 +472,15 @@ function updateWordCounter() {
 function clearSelection() {
     selectedWordId = null;
     currentWordIndex = -1;
+    currentLineWords = [];
+    currentLineId = null;
+    currentLineIndex = -1;
     
-    document.querySelectorAll('.hocr-word-box').forEach(box => {
+    document.querySelectorAll('.hocr-line-box').forEach(box => {
         box.classList.remove('selected');
     });
     
-    document.getElementById('word-editor').style.display = 'none';
+    document.getElementById('line-editor').style.display = 'none';
     document.getElementById('no-selection').style.display = 'block';
     updateWordCounter();
 }
@@ -526,11 +611,14 @@ async function loadCurrentImage() {
         // Reset navigation state for new image
         currentWordIndex = -1;
         selectedWordId = null;
+        currentLineWords = [];
+        currentLineId = null;
+        allLines = [];
+        currentLineIndex = -1;
         clearSelection();
     };
     
     img.src = image.image_url || '/static/uploads/' + image.image_path;
-    document.getElementById('hocr-editor').value = image.corrected_hocr || image.original_hocr;
 }
 
 async function parseAndDisplayHOCR(hocrXML) {
@@ -588,85 +676,310 @@ function renderHOCROverlay() {
     const scaleX = img.clientWidth / img.naturalWidth;
     const scaleY = img.clientHeight / img.naturalHeight;
 
-    hocrData.words.forEach((word, index) => {
-        const wordBox = document.createElement('div');
+    // Update line data to ensure we have current line information
+    updateLineData();
+    
+    // Create line boxes instead of word boxes
+    allLines.forEach((line, lineIndex) => {
+        const lineBox = document.createElement('div');
+        lineBox.className = 'hocr-line-box';
+        lineBox.id = 'line-box-' + line.id;
+        lineBox.setAttribute('data-line-index', lineIndex);
+        lineBox.setAttribute('data-line-id', line.id);
         
-        // Check if this is a manually added word (preserve existing element if it exists)
-        const existingBox = document.getElementById('box-' + word.id);
-        if (existingBox && existingBox.classList.contains('new-word-box')) {
-            // Update the existing manually added word box
-            wordBox.className = existingBox.className;
-            existingBox.remove();
-        } else {
-            // Regular OCR detected word
-            wordBox.className = 'hocr-word-box';
-        }
-        
-        wordBox.id = 'box-' + word.id;
-        wordBox.setAttribute('data-word-index', index);
-        
-        // Apply confidence-based styling for OCR words
-        if (word.confidence < 60 && !wordBox.classList.contains('new-word-box')) {
-            wordBox.classList.add('low-confidence');
-        }
+        // Calculate line bounding box from all words in the line
+        const lineBBox = calculateLineBoundingBox(line.words);
         
         // Scale bounding box to image display size
-        const x1 = word.bbox[0];
-        const y1 = word.bbox[1];
-        const x2 = word.bbox[2];
-        const y2 = word.bbox[3];
-        wordBox.style.left = (x1 * scaleX) + 'px';
-        wordBox.style.top = (y1 * scaleY) + 'px';
-        wordBox.style.width = ((x2 - x1) * scaleX) + 'px';
-        wordBox.style.height = ((y2 - y1) * scaleY) + 'px';
+        lineBox.style.left = (lineBBox.x1 * scaleX) + 'px';
+        lineBox.style.top = (lineBBox.y1 * scaleY) + 'px';
+        lineBox.style.width = ((lineBBox.x2 - lineBBox.x1) * scaleX) + 'px';
+        lineBox.style.height = ((lineBBox.y2 - lineBBox.y1) * scaleY) + 'px';
         
-        wordBox.title = word.text + ' (conf: ' + word.confidence + ')';
-        wordBox.onclick = () => {
+        // Apply confidence-based styling
+        const avgConf = line.avgConfidence;
+        if (avgConf < 60) {
+            lineBox.classList.add('low-confidence');
+        } else if (avgConf < 80) {
+            lineBox.classList.add('medium-confidence');
+        } else {
+            lineBox.classList.add('high-confidence');
+        }
+        
+        lineBox.title = `Line: ${line.text} (avg conf: ${avgConf}%)`;
+        lineBox.onclick = () => {
             if (!drawingMode) {
-                currentWordIndex = index;
-                selectWord(word.id);
+                selectLine(line.id, lineIndex);
             }
         };
         
-        overlay.appendChild(wordBox);
+        overlay.appendChild(lineBox);
     });
 }
 
-function selectWord(wordId) {
+function calculateLineBoundingBox(words) {
+    if (!words || words.length === 0) {
+        return { x1: 0, y1: 0, x2: 0, y2: 0 };
+    }
+    
+    // Sort words by X position (left to right reading order)
+    const sortedWords = [...words].sort((a, b) => a.bbox[0] - b.bbox[0]);
+    
+    const firstWord = sortedWords[0];
+    const lastWord = sortedWords[sortedWords.length - 1];
+    
+    // Get Y bounds from all words to handle slight vertical variations
+    let minY = Infinity, maxY = -Infinity;
+    words.forEach(word => {
+        const bbox = word.bbox;
+        const y1 = bbox[1]; 
+        const y2 = bbox[3];
+        
+        minY = Math.min(minY, y1);
+        maxY = Math.max(maxY, y2);
+    });
+    
+    // Line extends from start of first word to end of last word
+    return { 
+        x1: firstWord.bbox[0],  // Left edge of first word
+        y1: minY,               // Top of highest word
+        x2: lastWord.bbox[2],   // Right edge of last word  
+        y2: maxY                // Bottom of lowest word
+    };
+}
+
+function selectLine(lineId, lineIndex) {
     // Clear previous selection
-    document.querySelectorAll('.hocr-word-box').forEach(box => {
+    document.querySelectorAll('.hocr-line-box').forEach(box => {
         box.classList.remove('selected');
     });
     
-    // Select new word
-    const wordBox = document.getElementById('box-' + wordId);
-    if (wordBox) {
-        wordBox.classList.add('selected');
-        selectedWordId = wordId;
+    // Select new line
+    const lineBox = document.getElementById('line-box-' + lineId);
+    if (lineBox) {
+        lineBox.classList.add('selected');
+        currentLineId = lineId;
+        currentLineIndex = lineIndex;
         
-        // Update currentWordIndex based on selected word
-        const wordIndex = parseInt(wordBox.getAttribute('data-word-index'));
-        if (!isNaN(wordIndex)) {
-            currentWordIndex = wordIndex;
-        }
-        
-        const word = hocrData.words.find(w => w.id === wordId);
-        if (word) {
-            showWordEditor(word);
+        // Find the first word in the line and select it for editing
+        const line = allLines.find(l => l.id === lineId);
+        if (line && line.words && line.words.length > 0) {
+            const firstWord = line.words[0];
+            selectedWordId = firstWord.id;
+            currentWordIndex = hocrData.words.findIndex(w => w.id === firstWord.id);
+            
+            // Show line editor with the first word selected
+            showLineEditor(firstWord);
         }
         
         updateWordCounter();
     }
 }
 
-function showWordEditor(word) {
-    document.getElementById('word-editor').style.display = 'block';
-    document.getElementById('no-selection').style.display = 'none';
+function selectWord(wordId) {
+    selectedWordId = wordId;
+    currentWordIndex = hocrData.words.findIndex(w => w.id === wordId);
     
-    document.getElementById('word-id').textContent = word.id;
-    document.getElementById('word-text').value = word.text;
-    document.getElementById('word-confidence').innerHTML = getConfidenceHTML(word.confidence);
-    document.getElementById('word-bbox').textContent = word.bbox.join(', ');
+    const word = hocrData.words.find(w => w.id === wordId);
+    if (word) {
+        // Select the line that contains this word
+        const lineId = word.line_id || word.LineID;
+        if (lineId) {
+            const lineIndex = allLines.findIndex(l => l.id === lineId);
+            if (lineIndex !== -1) {
+                selectLine(lineId, lineIndex);
+            } else {
+                // Fallback: show line editor for the word
+                showLineEditor(word);
+            }
+        } else {
+            showLineEditor(word);
+        }
+        
+        updateWordCounter();
+    }
+}
+
+
+function showLineEditor(selectedWord) {
+    if (!hocrData || !hocrData.words) return;
+    
+    // Update line data
+    updateLineData();
+    
+    // Set current line
+    currentLineId = selectedWord.line_id;
+    currentLineWords = hocrData.words.filter(w => w.line_id === selectedWord.line_id);
+    currentLineWords.sort((a, b) => a.bbox[0] - b.bbox[0]);
+    
+    // Find current line index
+    currentLineIndex = allLines.findIndex(line => line.id === selectedWord.line_id);
+    
+    // Show line editor
+    document.getElementById('line-editor').style.display = 'block';
+    
+    // Update line display
+    displayLineEditor(selectedWord);
+}
+
+function updateLineData() {
+    if (!hocrData || !hocrData.words) return;
+    
+    // Group words by line_id
+    const lineGroups = {};
+    hocrData.words.forEach(word => {
+        if (!lineGroups[word.line_id]) {
+            lineGroups[word.line_id] = [];
+        }
+        lineGroups[word.line_id].push(word);
+    });
+    
+    // Create line objects with statistics
+    allLines = Object.keys(lineGroups).map(lineId => {
+        const words = lineGroups[lineId].sort((a, b) => a.bbox[0] - b.bbox[0]);
+        const avgY = words.reduce((sum, w) => sum + (w.bbox[1] + w.bbox[3]) / 2, 0) / words.length;
+        const avgConf = words.reduce((sum, w) => sum + w.confidence, 0) / words.length;
+        const text = words.map(w => w.text).join(' ');
+        
+        return {
+            id: lineId,
+            words: words,
+            avgY: avgY,
+            avgConfidence: Math.round(avgConf),
+            text: text
+        };
+    });
+    
+    // Sort lines by Y position (top to bottom)
+    allLines.sort((a, b) => a.avgY - b.avgY);
+}
+
+function displayLineEditor(selectedWord) {
+    if (!currentLineWords || currentLineWords.length === 0) return;
+    
+    // Update line counter
+    document.getElementById('line-counter').textContent = `Line ${currentLineIndex + 1} of ${allLines.length}`;
+    
+    // Update line text area
+    const lineText = currentLineWords.map(w => w.text).join(' ');
+    document.getElementById('line-text-area').value = lineText;
+    
+    // Update word buttons
+    const lineWordsElement = document.getElementById('line-words');
+    lineWordsElement.innerHTML = '';
+    
+    currentLineWords.forEach(word => {
+        const button = document.createElement('button');
+        button.className = 'word-button';
+        if (word.id === selectedWord.id) {
+            button.classList.add('selected');
+        }
+        
+        button.onclick = () => selectWordInLine(word.id);
+        
+        const textSpan = document.createElement('span');
+        textSpan.textContent = word.text;
+        
+        const confSpan = document.createElement('span');
+        confSpan.className = 'word-confidence';
+        if (word.confidence >= 80) {
+            confSpan.classList.add('conf-high');
+        } else if (word.confidence >= 60) {
+            confSpan.classList.add('conf-medium');
+        } else {
+            confSpan.classList.add('conf-low');
+        }
+        confSpan.textContent = `${word.confidence}%`;
+        
+        button.appendChild(textSpan);
+        button.appendChild(confSpan);
+        lineWordsElement.appendChild(button);
+    });
+    
+    // Update line stats
+    document.getElementById('line-word-count').textContent = currentLineWords.length;
+    const avgConf = Math.round(currentLineWords.reduce((sum, w) => sum + w.confidence, 0) / currentLineWords.length);
+    document.getElementById('line-avg-confidence').textContent = avgConf + '%';
+}
+
+function selectWordInLine(wordId) {
+    if (selectedWordId !== wordId) {
+        selectWord(wordId);
+    }
+}
+
+function updateLineText() {
+    if (!currentLineWords || currentLineWords.length === 0) return;
+    
+    const newText = document.getElementById('line-text-area').value;
+    const words = newText.trim().split(/\s+/);
+    
+    // Update existing words or create new ones
+    for (let i = 0; i < Math.max(words.length, currentLineWords.length); i++) {
+        if (i < words.length && i < currentLineWords.length) {
+            // Update existing word
+            currentLineWords[i].text = words[i];
+        } else if (i < words.length) {
+            // Need to create a new word - for now, just extend the last word's text
+            // This is a simplified approach - in reality you'd need to handle word boundaries
+            if (currentLineWords.length > 0) {
+                currentLineWords[currentLineWords.length - 1].text += ' ' + words.slice(currentLineWords.length).join(' ');
+                break;
+            }
+        } else {
+            // Remove extra words
+            const wordToRemove = currentLineWords[i];
+            hocrData.words = hocrData.words.filter(w => w.id !== wordToRemove.id);
+        }
+    }
+    
+    // Update the global hocrData
+    currentLineWords.forEach(word => {
+        const globalWord = hocrData.words.find(w => w.id === word.id);
+        if (globalWord) {
+            globalWord.text = word.text;
+        }
+    });
+    
+    // Refresh line editor display
+    const selectedWord = hocrData.words.find(w => w.id === selectedWordId);
+    if (selectedWord) {
+        displayLineEditor(selectedWord);
+    }
+    
+    // Update hOCR and metrics
+    updateHOCRSource();
+    updateMetrics();
+}
+
+function updateWordText(wordId, newText) {
+    if (!hocrData || !hocrData.words) return;
+    
+    const word = hocrData.words.find(w => w.id === wordId);
+    if (word) {
+        word.text = newText;
+        
+        // Update the main word editor if this is the selected word
+        if (wordId === selectedWordId) {
+            document.getElementById('word-text').value = newText;
+        }
+        
+        // Update line editor display
+        const selectedWord = hocrData.words.find(w => w.id === selectedWordId);
+        if (selectedWord) {
+            displayLineEditor(selectedWord);
+        }
+        
+        // Update hOCR and metrics
+        updateHOCRSource();
+        updateMetrics();
+    }
+}
+
+function escapeHTML(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function getConfidenceHTML(conf) {
@@ -704,7 +1017,6 @@ function deleteSelectedWord() {
         
         selectedWordId = null;
         
-        document.getElementById('word-editor').style.display = 'none';
         document.getElementById('no-selection').style.display = 'block';
         
         updateHOCRSource();
@@ -719,7 +1031,6 @@ function updateHOCRSource() {
     
     // Generate hOCR XML from current data
     const hocr = generateHOCRXML(hocrData);
-    document.getElementById('hocr-editor').value = hocr;
     
     // Update session data
     if (currentSession && currentSession.images[currentImageIndex]) {
@@ -727,15 +1038,7 @@ function updateHOCRSource() {
     }
 }
 
-function updateHOCRFromSource() {
-    const hocrXML = document.getElementById('hocr-editor').value;
-    parseAndDisplayHOCR(hocrXML);
-    
-    // Update session data
-    if (currentSession && currentSession.images[currentImageIndex]) {
-        currentSession.images[currentImageIndex].corrected_hocr = hocrXML;
-    }
-}
+// Remove updateHOCRFromSource as we no longer have the textarea
 
 function generateHOCRXML(data) {
     // Basic hOCR XML generation
@@ -828,7 +1131,7 @@ async function updateMetrics() {
     if (!hocrData || !currentSession) return;
     
     const originalText = extractTextFromHOCR(currentSession.images[currentImageIndex].original_hocr);
-    const correctedText = extractTextFromHOCR(document.getElementById('hocr-editor').value);
+    const correctedText = extractTextFromHOCR(generateHOCRXML(hocrData));
     
     try {
         const response = await fetch('/api/sessions/' + currentSession.id + '/metrics', {
@@ -899,7 +1202,7 @@ function applyZoom() {
 }
 
 async function saveAndNext() {
-    const hocrXML = document.getElementById('hocr-editor').value;
+    const hocrXML = generateHOCRXML(hocrData);
     currentSession.images[currentImageIndex].corrected_hocr = hocrXML;
     currentSession.images[currentImageIndex].completed = true;
     
@@ -909,7 +1212,11 @@ async function saveAndNext() {
     currentImageIndex++;
     selectedWordId = null;
     currentWordIndex = -1;
-    document.getElementById('word-editor').style.display = 'none';
+    currentLineWords = [];
+    currentLineId = null;
+    allLines = [];
+    currentLineIndex = -1;
+    document.getElementById('line-editor').style.display = 'none';
     document.getElementById('no-selection').style.display = 'block';
     
     loadCurrentImage();
@@ -920,7 +1227,11 @@ function previousImage() {
         currentImageIndex--;
         selectedWordId = null;
         currentWordIndex = -1;
-        document.getElementById('word-editor').style.display = 'none';
+        currentLineWords = [];
+        currentLineId = null;
+        allLines = [];
+        currentLineIndex = -1;
+        document.getElementById('line-editor').style.display = 'none';
         document.getElementById('no-selection').style.display = 'block';
         loadCurrentImage();
     }

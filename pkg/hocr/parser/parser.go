@@ -42,7 +42,7 @@ func ParseHOCRWords(hocrXML string) ([]models.HOCRWord, error) {
 
 	var words []models.HOCRWord
 
-	traverseElements(doc, &words)
+	traverseElementsWithLineContext(doc, &words, "")
 
 	return words, nil
 }
@@ -70,6 +70,32 @@ func traverseElements(element XMLElement, words *[]models.HOCRWord) {
 
 	for _, child := range element.Children {
 		traverseElements(child, words)
+	}
+}
+
+func traverseElementsWithLineContext(element XMLElement, words *[]models.HOCRWord, currentLineID string) {
+	// Update line ID if this element is a line element
+	if isLineElement(element) {
+		for _, attr := range element.Attrs {
+			if attr.Name.Local == "id" {
+				currentLineID = attr.Value
+				break
+			}
+		}
+	}
+
+	// Parse word elements with line context
+	if isWordElement(element) {
+		word, err := parseWordElement(element)
+		if err == nil && word.ID != "" {
+			word.LineID = currentLineID
+			*words = append(*words, word)
+		}
+	}
+
+	// Recursively traverse children with current line context
+	for _, child := range element.Children {
+		traverseElementsWithLineContext(child, words, currentLineID)
 	}
 }
 

@@ -5,3 +5,4 @@ web/uploads
 .terraform
 .terraform*
 terraform.*
+uploads

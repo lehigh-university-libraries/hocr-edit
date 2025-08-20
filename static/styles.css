@@ -459,10 +459,14 @@ body {
 /* Line Highlighting Styles */
 .hocr-line-box {
     position: absolute;
-    border: 2px solid transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: rgba(0, 0, 0, 0.1);
     cursor: pointer;
     transition: all 0.2s ease;
-    z-index: 5;
+    z-index: 10;
+    pointer-events: auto;
+    min-height: 20px;
+    min-width: 20px;
 }
 
 .hocr-line-box:hover {

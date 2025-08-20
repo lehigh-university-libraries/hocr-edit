@@ -1,0 +1,7 @@
+.env
+hocr-edit
+web/uploads
+!web/uploads/.keep
+.terraform
+.terraform*
+terraform.*

@@ -1,0 +1,26 @@
+version: "2"
+linters:
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - ../../go
+      - ../../../../opt
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - ../../go
+      - ../../../../opt
+      - third_party$
+      - builtin$
+      - examples$

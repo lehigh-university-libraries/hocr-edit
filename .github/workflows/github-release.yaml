@@ -1,0 +1,17 @@
+name: Create release
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - closed
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.title, 'skip-release')
+    uses: lehigh-university-libraries/gha/.github/workflows/bump-release.yaml@main
+    with:
+      workflow_file: goreleaser.yaml
+    permissions:
+      contents: write
+      actions: write
+    secrets: inherit

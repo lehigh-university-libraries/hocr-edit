@@ -16,8 +16,8 @@ import (
 	"github.com/lehigh-university-libraries/hocr-edit/internal/services/ocr"
 	"github.com/lehigh-university-libraries/hocr-edit/internal/storage"
 	"github.com/lehigh-university-libraries/hocr-edit/internal/utils"
-	"github.com/lehigh-university-libraries/hocr-edit/pkg/metrics"
 	"github.com/lehigh-university-libraries/hocr-edit/pkg/hocr/parser"
+	"github.com/lehigh-university-libraries/hocr-edit/pkg/metrics"
 )
 
 type Handler struct {
@@ -283,7 +283,35 @@ func (h *Handler) getOCRForImage(imagePath string) (string, error) {
 
 func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 	filepath := strings.TrimPrefix(r.URL.Path, "/static/")
-	http.ServeFile(w, r, filepath)
+
+	if strings.HasPrefix(filepath, "uploads/") {
+		http.ServeFile(w, r, filepath)
+		return
+	}
+
+	// Extract the file path after /static/
+	if filepath == "" {
+		filepath = "index.html"
+	}
+	// Prevent directory traversal attacks
+	if strings.Contains(filepath, "..") {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	// Set appropriate content type based on file extension
+	switch {
+	case strings.HasSuffix(filepath, ".css"):
+		w.Header().Set("Content-Type", "text/css")
+	case strings.HasSuffix(filepath, ".js"):
+		w.Header().Set("Content-Type", "application/javascript")
+	case strings.HasSuffix(filepath, ".html"):
+		w.Header().Set("Content-Type", "text/html")
+	}
+
+	// Serve files from the static directory
+	fullPath := "static/" + filepath
+	http.ServeFile(w, r, fullPath)
 }
 
 func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {

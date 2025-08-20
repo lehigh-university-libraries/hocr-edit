@@ -9,33 +9,38 @@ import (
 )
 
 type Converter struct {
-	pageCounter      int
-	blockCounter     int
-	paragraphCounter int
-	lineCounter      int
-	wordCounter      int
+	lineCounter int
+	wordCounter int
 }
 
 func NewConverter() *Converter {
 	return &Converter{
-		pageCounter:      1,
-		blockCounter:     1,
-		paragraphCounter: 1,
-		lineCounter:      1,
-		wordCounter:      1,
+		lineCounter: 1,
+		wordCounter: 1,
 	}
 }
 
-func (h *Converter) ConvertToHOCR(gcvResponse models.GCVResponse) (string, error) {
+func (h *Converter) ConvertToHOCRLines(gcvResponse models.GCVResponse) ([]models.HOCRLine, error) {
 	if len(gcvResponse.Responses) == 0 {
-		return "", fmt.Errorf("no responses found in GCV data")
+		return nil, fmt.Errorf("no responses found in GCV data")
 	}
 
 	response := gcvResponse.Responses[0]
 	if response.FullTextAnnotation == nil {
-		return "", fmt.Errorf("no full text annotation found")
+		return nil, fmt.Errorf("no full text annotation found")
 	}
 
+	var allLines []models.HOCRLine
+
+	for _, page := range response.FullTextAnnotation.Pages {
+		pageLines := h.convertPageToLines(page)
+		allLines = append(allLines, pageLines...)
+	}
+
+	return allLines, nil
+}
+
+func (h *Converter) ConvertHOCRLinesToXML(lines []models.HOCRLine, pageWidth, pageHeight int) string {
 	var hocr strings.Builder
 
 	hocr.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
@@ -50,71 +55,115 @@ func (h *Converter) ConvertToHOCR(gcvResponse models.GCVResponse) (string, error
 	hocr.WriteString("</head>\n")
 	hocr.WriteString("<body>\n")
 
-	for _, page := range response.FullTextAnnotation.Pages {
-		pageHOCR := h.convertPage(page)
-		hocr.WriteString(pageHOCR)
+	bbox := fmt.Sprintf("bbox 0 0 %d %d", pageWidth, pageHeight)
+	hocr.WriteString(fmt.Sprintf("<div class='ocr_page' id='page_1' title='%s'>\n", bbox))
+
+	for _, line := range lines {
+		hocr.WriteString(h.convertHOCRLineToXML(line))
 	}
 
+	hocr.WriteString("</div>\n")
 	hocr.WriteString("</body>\n")
 	hocr.WriteString("</html>\n")
 
-	return hocr.String(), nil
+	return hocr.String()
 }
 
-func (h *Converter) convertPage(page models.Page) string {
-	bbox := fmt.Sprintf("bbox 0 0 %d %d", page.Width, page.Height)
+func (h *Converter) convertHOCRLineToXML(line models.HOCRLine) string {
+	bbox := fmt.Sprintf("bbox %d %d %d %d", line.BBox.X1, line.BBox.Y1, line.BBox.X2, line.BBox.Y2)
+	
+	var lineBuilder strings.Builder
+	lineBuilder.WriteString(fmt.Sprintf("<span class='ocr_line' id='%s' title='%s'>", line.ID, bbox))
 
-	var pageBuilder strings.Builder
-	pageBuilder.WriteString(fmt.Sprintf("<div class='ocr_page' id='page_%d' title='%s'>\n",
-		h.pageCounter, bbox))
+	for _, word := range line.Words {
+		wordXML := h.convertHOCRWordToXML(word)
+		lineBuilder.WriteString(wordXML)
+	}
+
+	lineBuilder.WriteString("</span>\n")
+	return lineBuilder.String()
+}
+
+func (h *Converter) convertHOCRWordToXML(word models.HOCRWord) string {
+	bbox := fmt.Sprintf("bbox %d %d %d %d", word.BBox.X1, word.BBox.Y1, word.BBox.X2, word.BBox.Y2)
+	confidence := fmt.Sprintf("; x_wconf %.0f", word.Confidence)
+	title := bbox + confidence
+
+	return fmt.Sprintf("<span class='ocrx_word' id='%s' title='%s'>%s</span> ",
+		word.ID, title, html.EscapeString(word.Text))
+}
+
+func (h *Converter) ConvertToHOCR(gcvResponse models.GCVResponse) (string, error) {
+	lines, err := h.ConvertToHOCRLines(gcvResponse)
+	if err != nil {
+		return "", err
+	}
+
+	if len(gcvResponse.Responses) == 0 || gcvResponse.Responses[0].FullTextAnnotation == nil || len(gcvResponse.Responses[0].FullTextAnnotation.Pages) == 0 {
+		return "", fmt.Errorf("no page data found")
+	}
+
+	page := gcvResponse.Responses[0].FullTextAnnotation.Pages[0]
+	return h.ConvertHOCRLinesToXML(lines, page.Width, page.Height), nil
+}
+
+func (h *Converter) convertPageToLines(page models.Page) []models.HOCRLine {
+	var allLines []models.HOCRLine
 
 	for _, block := range page.Blocks {
 		if block.BlockType == "TEXT" {
-			blockHOCR := h.convertBlock(block)
-			pageBuilder.WriteString(blockHOCR)
+			blockLines := h.convertBlockToLines(block)
+			allLines = append(allLines, blockLines...)
 		}
 	}
 
-	pageBuilder.WriteString("</div>\n")
-	h.pageCounter++
-	return pageBuilder.String()
+	return allLines
 }
 
-func (h *Converter) convertBlock(block models.Block) string {
-	bbox := h.boundingPolyToBBox(block.BoundingBox)
 
-	var blockBuilder strings.Builder
-	blockBuilder.WriteString(fmt.Sprintf("<div class='ocr_carea' id='carea_%d' title='%s'>\n",
-		h.blockCounter, bbox))
+func (h *Converter) convertBlockToLines(block models.Block) []models.HOCRLine {
+	var allLines []models.HOCRLine
 
 	for _, paragraph := range block.Paragraphs {
-		paragraphHOCR := h.convertParagraph(paragraph)
-		blockBuilder.WriteString(paragraphHOCR)
+		paragraphLines := h.convertParagraphToLines(paragraph)
+		allLines = append(allLines, paragraphLines...)
 	}
 
-	blockBuilder.WriteString("</div>\n")
-	h.blockCounter++
-	return blockBuilder.String()
+	return allLines
 }
 
-func (h *Converter) convertParagraph(paragraph models.Paragraph) string {
-	bbox := h.boundingPolyToBBox(paragraph.BoundingBox)
 
-	var paragraphBuilder strings.Builder
-	paragraphBuilder.WriteString(fmt.Sprintf("<p class='ocr_par' id='par_%d' title='%s'>\n",
-		h.paragraphCounter, bbox))
+func (h *Converter) convertParagraphToLines(paragraph models.Paragraph) []models.HOCRLine {
+	wordsGroups := h.groupWordsIntoLines(paragraph.Words)
+	var lines []models.HOCRLine
 
-	lines := h.groupWordsIntoLines(paragraph.Words)
+	for _, wordsGroup := range wordsGroups {
+		if len(wordsGroup) == 0 {
+			continue
+		}
 
-	for _, line := range lines {
-		lineHOCR := h.convertLine(line)
-		paragraphBuilder.WriteString(lineHOCR)
+		lineID := fmt.Sprintf("line_%d", h.lineCounter)
+		lineBBox := h.calculateLineBBoxStruct(wordsGroup)
+		
+		var hocrWords []models.HOCRWord
+		for _, gcvWord := range wordsGroup {
+			hocrWord := h.convertGCVWordToHOCRWord(gcvWord, lineID)
+			hocrWords = append(hocrWords, hocrWord)
+		}
+
+		line := models.HOCRLine{
+			ID:    lineID,
+			BBox:  lineBBox,
+			Words: hocrWords,
+		}
+
+		lines = append(lines, line)
+		h.lineCounter++
 	}
 
-	paragraphBuilder.WriteString("</p>\n")
-	h.paragraphCounter++
-	return paragraphBuilder.String()
+	return lines
 }
+
 
 func (h *Converter) groupWordsIntoLines(words []models.Word) [][]models.Word {
 	if len(words) == 0 {
@@ -152,63 +201,13 @@ func (h *Converter) groupWordsIntoLines(words []models.Word) [][]models.Word {
 	return lines
 }
 
-func (h *Converter) convertLine(words []models.Word) string {
+
+
+
+
+func (h *Converter) calculateLineBBoxStruct(words []models.Word) models.BBox {
 	if len(words) == 0 {
-		return ""
-	}
-
-	lineBBox := h.calculateLineBoundingBox(words)
-
-	var lineBuilder strings.Builder
-	lineBuilder.WriteString(fmt.Sprintf("<span class='ocr_line' id='line_%d' title='%s'>",
-		h.lineCounter, lineBBox))
-
-	for _, word := range words {
-		wordHOCR := h.convertWord(word)
-		lineBuilder.WriteString(wordHOCR)
-	}
-
-	lineBuilder.WriteString("</span>\n")
-	h.lineCounter++
-	return lineBuilder.String()
-}
-
-func (h *Converter) convertWord(word models.Word) string {
-	bbox := h.boundingPolyToBBox(word.BoundingBox)
-
-	var text strings.Builder
-	for _, symbol := range word.Symbols {
-		text.WriteString(symbol.Text)
-	}
-
-	confidence := "; x_wconf 95"
-
-	lang := ""
-	if word.Property != nil && len(word.Property.DetectedLanguages) > 0 {
-		lang = fmt.Sprintf("; x_lang %s", word.Property.DetectedLanguages[0].LanguageCode)
-	}
-
-	title := bbox + confidence + lang
-
-	wordHOCR := fmt.Sprintf("<span class='ocrx_word' id='word_%d' title='%s'>%s</span>",
-		h.wordCounter, title, html.EscapeString(text.String()))
-
-	if len(word.Symbols) > 0 {
-		lastSymbol := word.Symbols[len(word.Symbols)-1]
-		if lastSymbol.Property == nil || lastSymbol.Property.DetectedBreak == nil ||
-			(lastSymbol.Property.DetectedBreak.Type != "LINE_BREAK" &&
-				lastSymbol.Property.DetectedBreak.Type != "EOL_SURE_SPACE") {
-			wordHOCR += " "
-		}
-	}
-
-	h.wordCounter++
-	return wordHOCR
-}
-
-func (h *Converter) calculateLineBoundingBox(words []models.Word) string {
-	if len(words) == 0 {
-		return "bbox 0 0 0 0"
+		return models.BBox{X1: 0, Y1: 0, X2: 0, Y2: 0}
 	}
 
 	minX, minY := int(^uint(0)>>1), int(^uint(0)>>1)
@@ -231,12 +230,37 @@ func (h *Converter) calculateLineBoundingBox(words []models.Word) string {
 		}
 	}
 
-	return fmt.Sprintf("bbox %d %d %d %d", minX, minY, maxX, maxY)
+	return models.BBox{X1: minX, Y1: minY, X2: maxX, Y2: maxY}
 }
 
-func (h *Converter) boundingPolyToBBox(boundingPoly models.BoundingPoly) string {
+func (h *Converter) convertGCVWordToHOCRWord(gcvWord models.Word, lineID string) models.HOCRWord {
+	var text strings.Builder
+	for _, symbol := range gcvWord.Symbols {
+		text.WriteString(symbol.Text)
+	}
+
+	bbox := h.boundingPolyToBBoxStruct(gcvWord.BoundingBox)
+	
+	confidence := 95.0
+	if gcvWord.Property != nil && len(gcvWord.Property.DetectedLanguages) > 0 {
+		confidence = gcvWord.Property.DetectedLanguages[0].Confidence * 100
+	}
+
+	wordID := fmt.Sprintf("word_%d", h.wordCounter)
+	h.wordCounter++
+
+	return models.HOCRWord{
+		ID:         wordID,
+		Text:       text.String(),
+		BBox:       bbox,
+		Confidence: confidence,
+		LineID:     lineID,
+	}
+}
+
+func (h *Converter) boundingPolyToBBoxStruct(boundingPoly models.BoundingPoly) models.BBox {
 	if len(boundingPoly.Vertices) == 0 {
-		return "bbox 0 0 0 0"
+		return models.BBox{X1: 0, Y1: 0, X2: 0, Y2: 0}
 	}
 
 	minX, minY := int(^uint(0)>>1), int(^uint(0)>>1)
@@ -257,5 +281,5 @@ func (h *Converter) boundingPolyToBBox(boundingPoly models.BoundingPoly) string 
 		}
 	}
 
-	return fmt.Sprintf("bbox %d %d %d %d", minX, minY, maxX, maxY)
+	return models.BBox{X1: minX, Y1: minY, X2: maxX, Y2: maxY}
 }

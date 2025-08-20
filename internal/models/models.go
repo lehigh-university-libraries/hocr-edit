@@ -71,6 +71,12 @@ type ImageItem struct {
 	ImageHeight   int    `json:"image_height"`
 }
 
+type HOCRLine struct {
+	ID    string     `json:"id"`
+	BBox  BBox       `json:"bbox"`
+	Words []HOCRWord `json:"words"`
+}
+
 type HOCRWord struct {
 	ID         string  `json:"id"`
 	Text       string  `json:"text"`

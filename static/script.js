@@ -661,6 +661,95 @@ function resetUploadArea() {
     `;
 }
 
+async function saveToIslandora() {
+    if (!currentSession) {
+        alert('No active session');
+        return;
+    }
+
+    // Check if this is a Drupal session by looking for the upload URL
+    const isDrupalSession = currentSession.images && 
+                           currentSession.images.length > 0 && 
+                           currentSession.images[0].corrected_hocr && 
+                           currentSession.images[0].corrected_hocr.startsWith('DRUPAL_UPLOAD:');
+
+    if (!isDrupalSession) {
+        alert('This session was not created from a Drupal node');
+        return;
+    }
+
+    // Get current HOCR data
+    const hocrData = getCurrentHOCR();
+    if (!hocrData) {
+        alert('No HOCR data to save');
+        return;
+    }
+
+    // Show loading state
+    const button = document.getElementById('save-islandora-btn');
+    const originalText = button.textContent;
+    button.textContent = 'Saving...';
+    button.disabled = true;
+
+    try {
+        const response = await fetch('/api/drupal/upload', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                session_id: currentSession.id,
+                hocr: hocrData
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Upload failed');
+        }
+
+        alert('Successfully saved to Islandora!');
+        console.log('Islandora upload successful:', result.message);
+
+    } catch (error) {
+        console.error('Islandora upload error:', error);
+        alert('Failed to save to Islandora: ' + error.message);
+    } finally {
+        // Reset button state
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}
+
+function getCurrentHOCR() {
+    // Generate HOCR from current session data
+    if (!currentSession || !currentSession.images || currentSession.images.length === 0) {
+        return null;
+    }
+
+    const currentImage = currentSession.images[currentImageIndex];
+    return currentImage.corrected_hocr || currentImage.original_hocr;
+}
+
+function checkForDrupalSession() {
+    // Show/hide the Islandora button based on session type
+    const button = document.getElementById('save-islandora-btn');
+    if (!button) return;
+
+    const isDrupalSession = currentSession && 
+                           currentSession.images && 
+                           currentSession.images.length > 0 && 
+                           currentSession.images[0].corrected_hocr && 
+                           currentSession.images[0].corrected_hocr.startsWith('DRUPAL_UPLOAD:');
+
+    if (isDrupalSession) {
+        button.classList.remove('hidden');
+    } else {
+        button.classList.add('hidden');
+    }
+}
+
 async function loadSession(sessionId) {
     try {
         const response = await fetch('/api/sessions/' + sessionId);
@@ -676,6 +765,7 @@ async function loadSession(sessionId) {
 function showCorrectionInterface() {
     document.getElementById('upload-section').classList.add('hidden');
     document.getElementById('correction-section').classList.remove('hidden');
+    checkForDrupalSession();
 }
 
 async function loadCurrentImage() {

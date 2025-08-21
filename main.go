@@ -23,6 +23,7 @@ func main() {
 	http.HandleFunc("/api/upload", handler.HandleUpload)
 	http.HandleFunc("/api/hocr/parse", handler.HandleHOCRParse)
 	http.HandleFunc("/api/hocr/update", handler.HandleHOCRUpdate)
+	http.HandleFunc("/api/drupal/upload", handler.HandleDrupalHOCRUpload)
 	http.HandleFunc("/", handler.HandleStatic)
 
 	addr := ":8888"

@@ -260,6 +260,11 @@ body {
     background: linear-gradient(135deg, #ef4444, #dc2626);
     color: white;
 }
+.btn-drupal {
+    background: linear-gradient(135deg, #0678be, #004f80);
+    color: white;
+    border: 1px solid #0678be;
+}
 .btn:hover { 
     transform: translateY(-2px);
     box-shadow: 0 8px 25px rgba(0,0,0,0.2);

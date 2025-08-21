@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -27,7 +26,7 @@ func main() {
 	http.HandleFunc("/", handler.HandleStatic)
 
 	addr := ":8888"
-	slog.Info("hOCR Editor interface available", "url", fmt.Sprintf("http://%s", addr))
+	slog.Info("hOCR Editor interface available", "addr", addr)
 
 	http.ListenAndServe(addr, nil)
 }

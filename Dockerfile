@@ -2,7 +2,7 @@ FROM golang:1.25-alpine3.22@sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bf
 
 WORKDIR /app
 
-RUN apk add --no-cache curl && \
+RUN apk add --no-cache curl imagemagick && \
   adduser -S -G nobody -u 8888 hocr
 
 COPY --chown=hocr:hocr main.go go.* ./

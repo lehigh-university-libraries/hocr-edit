@@ -43,9 +43,9 @@ document.addEventListener('keydown', function(e) {
             }
             break;
         case 'Delete':
-            if (selectedWordId && document.activeElement !== document.getElementById('word-text')) {
+            if (currentLineId && document.activeElement !== document.getElementById('line-text-area')) {
                 e.preventDefault();
-                deleteSelectedWord();
+                deleteSelectedLine();
             }
             break;
         case 'Escape':
@@ -765,39 +765,42 @@ function selectLine(lineId, lineIndex) {
         if (dimmingOverlay) {
             dimmingOverlay.classList.add('active');
 
-            // Calculate line bounds for clipping
-            const imageContainer = document.getElementById('image-container');
-            const containerRect = imageContainer.getBoundingClientRect();
-            const lineBoxRect = lineBox.getBoundingClientRect();
+            // Use requestAnimationFrame to ensure layout is updated before calculating clip-path
+            requestAnimationFrame(() => {
+                // Calculate line bounds for clipping
+                const imageContainer = document.getElementById('image-container');
+                const containerRect = imageContainer.getBoundingClientRect();
+                const lineBoxRect = lineBox.getBoundingClientRect();
 
-            // Convert to percentages relative to image container
-            const left = ((lineBoxRect.left - containerRect.left) / containerRect.width * 100);
-            const top = ((lineBoxRect.top - containerRect.top) / containerRect.height * 100);
-            const right = ((lineBoxRect.right - containerRect.left) / containerRect.width * 100);
-            const bottom = ((lineBoxRect.bottom - containerRect.top) / containerRect.height * 100);
+                // Convert to percentages relative to image container
+                const left = ((lineBoxRect.left - containerRect.left) / containerRect.width * 100);
+                const top = ((lineBoxRect.top - containerRect.top) / containerRect.height * 100);
+                const right = ((lineBoxRect.right - containerRect.left) / containerRect.width * 100);
+                const bottom = ((lineBoxRect.bottom - containerRect.top) / containerRect.height * 100);
 
-            // Add some padding around the line
-            const padding = 2; // percentage
-            const clipLeft = Math.max(0, left - padding);
-            const clipTop = Math.max(0, top - padding);
-            const clipRight = Math.min(100, right + padding);
-            const clipBottom = Math.min(100, bottom + padding);
+                // Add some padding around the line
+                const padding = 2; // percentage
+                const clipLeft = Math.max(0, left - padding);
+                const clipTop = Math.max(0, top - padding);
+                const clipRight = Math.min(100, right + padding);
+                const clipBottom = Math.min(100, bottom + padding);
 
-            // Create clip-path that covers everything except the selected line area
-            const clipPath = `polygon(
-                0% 0%, 
-                0% 100%, 
-                ${clipLeft}% 100%, 
-                ${clipLeft}% ${clipTop}%, 
-                ${clipRight}% ${clipTop}%, 
-                ${clipRight}% ${clipBottom}%, 
-                ${clipLeft}% ${clipBottom}%, 
-                ${clipLeft}% 100%, 
-                100% 100%, 
-                100% 0%
-            )`;
+                // Create clip-path that covers everything except the selected line area
+                const clipPath = `polygon(
+                    0% 0%, 
+                    0% 100%, 
+                    ${clipLeft}% 100%, 
+                    ${clipLeft}% ${clipTop}%, 
+                    ${clipRight}% ${clipTop}%, 
+                    ${clipRight}% ${clipBottom}%, 
+                    ${clipLeft}% ${clipBottom}%, 
+                    ${clipLeft}% 100%, 
+                    100% 100%, 
+                    100% 0%
+                )`;
 
-            dimmingOverlay.style.clipPath = clipPath;
+                dimmingOverlay.style.clipPath = clipPath;
+            });
         }
 
         // Mark adjacent lines (2 above and 2 below) as clickable with reduced overlay
@@ -1056,26 +1059,36 @@ function updateSelectedWord() {
     }
 }
 
-function deleteSelectedWord() {
-    if (!selectedWordId || !hocrData) return;
+function deleteSelectedLine() {
+    if (!currentLineId || !hocrData) return;
 
-    if (confirm('Delete this word?')) {
-        const wordIndex = hocrData.words.findIndex(w => w.id === selectedWordId);
-        hocrData.words = hocrData.words.filter(w => w.id !== selectedWordId);
+    const line = allLines.find(l => l.id === currentLineId);
+    if (!line) return;
 
-        // Adjust currentWordIndex if necessary
-        if (wordIndex <= currentWordIndex && currentWordIndex > 0) {
-            currentWordIndex--;
-        }
+    if (confirm(`Delete this entire line (${line.words.length} words)?`)) {
+        // Remove all words in the line
+        const wordsToDelete = line.words.map(w => w.id);
+        hocrData.words = hocrData.words.filter(w => !wordsToDelete.includes(w.id));
 
+        // Clear selection
         selectedWordId = null;
+        currentWordIndex = -1;
+        currentLineWords = [];
+        currentLineId = null;
+        currentLineIndex = -1;
 
+        // Hide line editor
+        document.getElementById('line-editor').style.display = 'none';
         document.getElementById('no-selection').style.display = 'block';
 
+        // Update everything
         updateHOCRSource();
         renderHOCROverlay();
         updateMetrics();
         updateWordCounter();
+
+        // Clear selection visual state
+        clearSelection();
     }
 }
 

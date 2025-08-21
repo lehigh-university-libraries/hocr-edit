@@ -90,14 +90,11 @@
                         <button class="btn btn-primary" id="drawing-mode-btn" onclick="toggleDrawingMode()" style="width: 100%; margin-bottom: 10px;">
                             ✏️ Draw New Line
                         </button>
-                        <button class="btn btn-secondary" onclick="toggleLowConfidence()" style="width: 100%; margin-bottom: 10px;">
-                            Highlight Low Confidence
-                        </button>
                         <button class="btn btn-success" id="download-hocr-btn" onclick="downloadFormattedHocr()" style="width: 100%; margin-bottom: 10px;">
                             <span class="material-symbols-outlined">content_copy</span> Copy hOCR
                         </button>
-                        <button class="btn btn-danger" onclick="deleteSelectedWord()" style="width: 100%;">
-                            Delete Selected Word
+                        <button class="btn btn-danger" onclick="deleteSelectedLine()" style="width: 100%;">
+                            Delete Selected Line
                         </button>
                     </div>
                     <div class="sidebar-section">
@@ -107,7 +104,7 @@
                             • <kbd>Tab</kbd> - Next line<br>
                             • <kbd>Shift+Tab</kbd> - Previous line<br>
                             • <kbd>Enter</kbd> - Apply changes<br>
-                            • <kbd>Delete</kbd> - Delete selected word<br>
+                            • <kbd>Delete</kbd> - Delete selected line<br>
                             • <kbd>D</kbd> - Toggle drawing mode<br>
                             • <kbd>Esc</kbd> - Clear selection/Exit drawing
                         </div>

@@ -514,7 +514,7 @@ function applyWordChanges() {
 
 async function loadSessions() {
     try {
-        const response = await fetch('/api/sessions');
+        const response = await fetch('api/sessions');
         const sessions = await response.json();
         displaySessions(sessions);
     } catch (error) {
@@ -558,7 +558,7 @@ async function handleUpload() {
     }
 
     try {
-        const response = await fetch('/api/upload', {
+        const response = await fetch('api/upload', {
             method: 'POST',
             body: formData
         });
@@ -606,7 +606,7 @@ async function handleUrlUpload() {
     uploadArea.innerHTML = '<h3>Processing image URL...</h3><p>Please wait while the image is downloaded and processed with OCR.</p>';
 
     try {
-        const response = await fetch('/api/upload', {
+        const response = await fetch('api/upload', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -748,7 +748,7 @@ function checkForDrupalSession() {
 
 async function loadSession(sessionId) {
     try {
-        const response = await fetch('/api/sessions/' + sessionId);
+        const response = await fetch('api/sessions/' + sessionId);
         currentSession = await response.json();
         currentImageIndex = currentSession.current || 0;
         showCorrectionInterface();
@@ -799,7 +799,7 @@ async function loadCurrentImage() {
 
 async function parseAndDisplayHOCR(hocrXML) {
     try {
-        const response = await fetch('/api/hocr/parse', {
+        const response = await fetch('api/hocr/parse', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hocr: hocrXML })
@@ -1369,7 +1369,7 @@ async function updateMetrics() {
     const correctedText = extractTextFromHOCR(generateHOCRXML(hocrData));
 
     try {
-        const response = await fetch('/api/sessions/' + currentSession.id + '/metrics', {
+        const response = await fetch('api/sessions/' + currentSession.id + '/metrics', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1447,7 +1447,7 @@ function previousImage() {
 
 async function saveSession() {
     try {
-        await fetch('/api/sessions/' + currentSession.id, {
+        await fetch('api/sessions/' + currentSession.id, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(currentSession)

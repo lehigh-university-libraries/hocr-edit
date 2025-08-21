@@ -1240,33 +1240,6 @@ function extractTextFromHOCR(hocrXML) {
     }
 }
 
-// Zoom controls
-function zoomIn() {
-    imageScale *= 1.2;
-    applyZoom();
-}
-
-function zoomOut() {
-    imageScale /= 1.2;
-    applyZoom();
-}
-
-function resetZoom() {
-    imageScale = 1;
-    applyZoom();
-}
-
-function applyZoom() {
-    const img = document.getElementById('current-image');
-    const overlay = document.getElementById('hocr-overlay');
-
-    img.style.transform = `scale(${imageScale})`;
-    overlay.style.transform = `scale(${imageScale})`;
-
-    // Re-render overlay with new scale
-    setTimeout(renderHOCROverlay, 10);
-}
-
 async function saveAndNext() {
     const hocrXML = generateHOCRXML(hocrData);
     currentSession.images[currentImageIndex].corrected_hocr = hocrXML;

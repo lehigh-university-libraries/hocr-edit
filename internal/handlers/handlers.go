@@ -696,7 +696,7 @@ func (h *Handler) createSessionFromDrupalNode(nid string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Drupal returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("drupal returned HTTP %d", resp.StatusCode)
 	}
 
 	// Parse JSON response

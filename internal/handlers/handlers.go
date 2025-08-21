@@ -16,8 +16,8 @@ import (
 	"github.com/lehigh-university-libraries/hocr-edit/internal/services/ocr"
 	"github.com/lehigh-university-libraries/hocr-edit/internal/storage"
 	"github.com/lehigh-university-libraries/hocr-edit/internal/utils"
-	"github.com/lehigh-university-libraries/hocr-edit/pkg/metrics"
 	"github.com/lehigh-university-libraries/hocr-edit/pkg/hocr/parser"
+	"github.com/lehigh-university-libraries/hocr-edit/pkg/metrics"
 )
 
 type Handler struct {
@@ -49,7 +49,10 @@ func (h *Handler) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		for _, session := range sessions {
 			sessionList = append(sessionList, session)
 		}
-		json.NewEncoder(w).Encode(sessionList)
+		if err := json.NewEncoder(w).Encode(sessionList); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -74,15 +77,23 @@ func (h *Handler) HandleSessionDetail(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		json.NewEncoder(w).Encode(session)
+		if err := json.NewEncoder(w).Encode(session); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	case "PUT":
 		var updatedSession models.CorrectionSession
 		if err := json.NewDecoder(r.Body).Decode(&updatedSession); err != nil {
+			slog.Error("Unable to decode session data", "err", err)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 		h.sessionStore.Set(sessionID, &updatedSession)
-		json.NewEncoder(w).Encode(updatedSession)
+		if err := json.NewEncoder(w).Encode(updatedSession); err != nil {
+			slog.Error("Unable to encode session data", "err", err)
+			http.Error(w, "Invalid JSON", http.StatusInternalServerError)
+			return
+		}
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -95,12 +106,16 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request, _ string
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		slog.Error("Unable to decode metrics data", "err", err)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	metricsResult := metrics.CalculateAccuracyMetrics(request.Original, request.Corrected)
-	json.NewEncoder(w).Encode(metricsResult)
+	if err := json.NewEncoder(w).Encode(metricsResult); err != nil {
+		slog.Error("Unable to encode metrics data", "err", err)
+		http.Error(w, "Invalid JSON", http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) HandleHOCRUpdate(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +152,10 @@ func (h *Handler) HandleHOCRUpdate(w http.ResponseWriter, r *http.Request) {
 	h.sessionStore.Set(request.SessionID, session)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "success"}); err != nil {
+		slog.Error("Unable to encode success", "err", err)
+		http.Error(w, "Invalid JSON", http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +281,10 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		"md5_hash":   md5Hash,
 	}
 
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Error("Unable to encode response data", "err", err)
+		http.Error(w, "Invalid JSON", http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) getOCRForImage(imagePath string) (string, error) {
@@ -283,7 +304,35 @@ func (h *Handler) getOCRForImage(imagePath string) (string, error) {
 
 func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 	filepath := strings.TrimPrefix(r.URL.Path, "/static/")
-	http.ServeFile(w, r, filepath)
+
+	if strings.HasPrefix(filepath, "uploads/") {
+		http.ServeFile(w, r, filepath)
+		return
+	}
+
+	// Extract the file path after /static/
+	if filepath == "" {
+		filepath = "index.html"
+	}
+	// Prevent directory traversal attacks
+	if strings.Contains(filepath, "..") {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	// Set appropriate content type based on file extension
+	switch {
+	case strings.HasSuffix(filepath, ".css"):
+		w.Header().Set("Content-Type", "text/css")
+	case strings.HasSuffix(filepath, ".js"):
+		w.Header().Set("Content-Type", "application/javascript")
+	case strings.HasSuffix(filepath, ".html"):
+		w.Header().Set("Content-Type", "text/html")
+	}
+
+	// Serve files from the static directory
+	fullPath := "static/" + filepath
+	http.ServeFile(w, r, fullPath)
 }
 
 func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {
@@ -313,5 +362,8 @@ func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {
 		Words: words,
 	}
 
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Error("Unable to encode response data", "err", err)
+		http.Error(w, "Invalid JSON", http.StatusInternalServerError)
+	}
 }

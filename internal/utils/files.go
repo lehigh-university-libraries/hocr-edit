@@ -39,7 +39,9 @@ func RespondWithError(w http.ResponseWriter, message string, statusCode int) {
 	response := map[string]string{
 		"error": message,
 	}
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Error("Failed to encode error response", "error", err)
+	}
 }
 
 func GetImageDimensions(imagePath string) (int, int) {

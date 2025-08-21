@@ -33,7 +33,7 @@ func (s *SessionStore) Set(sessionID string, session *models.CorrectionSession) 
 func (s *SessionStore) GetAll() map[string]*models.CorrectionSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	result := make(map[string]*models.CorrectionSession, len(s.sessions))
 	for k, v := range s.sessions {
 		result[k] = v

@@ -24,3 +24,11 @@ jobs:
 
       - name: Test with the Go CLI
         run: go test -v ./...
+
+  build-push-ghcr:
+    needs: [lint-test]
+    uses: lehigh-university-libraries/gha/.github/workflows/build-push-ghcr.yaml@main
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit

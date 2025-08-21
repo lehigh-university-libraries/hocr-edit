@@ -477,7 +477,7 @@ function clearSelection() {
     currentLineIndex = -1;
     
     document.querySelectorAll('.hocr-line-box').forEach(box => {
-        box.classList.remove('selected');
+        box.classList.remove('selected', 'adjacent-clickable');
     });
     
     // Deactivate dimming overlay and reset clip-path
@@ -748,9 +748,9 @@ function calculateLineBoundingBox(words) {
 }
 
 function selectLine(lineId, lineIndex) {
-    // Clear previous selection
+    // Clear previous selection and adjacent classes
     document.querySelectorAll('.hocr-line-box').forEach(box => {
-        box.classList.remove('selected');
+        box.classList.remove('selected', 'adjacent-clickable');
     });
     
     // Select new line
@@ -798,6 +798,20 @@ function selectLine(lineId, lineIndex) {
             )`;
             
             dimmingOverlay.style.clipPath = clipPath;
+        }
+        
+        // Mark adjacent lines (2 above and 2 below) as clickable with reduced overlay
+        for (let offset = -2; offset <= 2; offset++) {
+            if (offset === 0) continue; // Skip the selected line itself
+            
+            const adjacentIndex = lineIndex + offset;
+            if (adjacentIndex >= 0 && adjacentIndex < allLines.length) {
+                const adjacentLineId = allLines[adjacentIndex].id;
+                const adjacentLineBox = document.getElementById('line-box-' + adjacentLineId);
+                if (adjacentLineBox) {
+                    adjacentLineBox.classList.add('adjacent-clickable');
+                }
+            }
         }
         
         // Find the first word in the line and select it for editing

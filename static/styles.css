@@ -534,6 +534,18 @@ body {
     background: rgba(16, 185, 129, 0.1);
 }
 
+.hocr-line-box.adjacent-clickable {
+    border: none;
+    background: transparent;
+    opacity: 0.3;
+}
+
+.hocr-line-box.adjacent-clickable:hover {
+    border: 2px solid rgba(59, 130, 246, 0.4);
+    background: rgba(59, 130, 246, 0.05);
+    opacity: 0.8;
+}
+
 /* Line Editor Styles */
 .line-info {
     display: flex;

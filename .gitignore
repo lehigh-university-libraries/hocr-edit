@@ -4,3 +4,4 @@ hocr-edit
 .terraform*
 terraform.*
 uploads
+cache

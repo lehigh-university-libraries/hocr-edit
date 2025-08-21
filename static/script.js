@@ -17,8 +17,20 @@ let drawingStart = null;
 let currentDrawingBox = null;
 let pendingAnnotation = null;
 
-// Load sessions on page load
-document.addEventListener('DOMContentLoaded', loadSessions);
+// Load sessions and check URL parameters on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Check for session parameter first
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionParam = urlParams.get('session');
+
+    if (sessionParam) {
+        // Load the specific session
+        loadSession(sessionParam);
+    } else {
+        // Load sessions list as usual
+        loadSessions();
+    }
+});
 
 // Global keyboard event listener for navigation
 document.addEventListener('keydown', function(e) {
@@ -568,14 +580,85 @@ async function handleUpload() {
         alert('Upload failed: ' + error.message);
 
         // Reset upload area
-        uploadArea.innerHTML = `
-            <h3>Start New hOCR Correction Session</h3>
-            <p>Upload images - they'll be processed with hOCR-capable OCR</p>
-            <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.gif,.csv" multiple style="margin: 20px 0;">
+        resetUploadArea();
+    }
+}
+
+async function handleUrlUpload() {
+    const urlInput = document.getElementById('url-input');
+    const imageUrl = urlInput.value.trim();
+
+    if (!imageUrl) {
+        alert('Please enter an image URL');
+        return;
+    }
+
+    // Basic URL validation
+    try {
+        new URL(imageUrl);
+    } catch {
+        alert('Please enter a valid URL');
+        return;
+    }
+
+    // Show upload progress
+    const uploadArea = document.getElementById('upload-area');
+    uploadArea.innerHTML = '<h3>Processing image URL...</h3><p>Please wait while the image is downloaded and processed with OCR.</p>';
+
+    try {
+        const response = await fetch('/api/upload', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                image_url: imageUrl
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'URL processing failed');
+        }
+
+        if (result.session_id) {
+            console.log('URL processing successful:', result.message);
+            loadSession(result.session_id);
+        } else {
+            throw new Error('No session ID received');
+        }
+    } catch (error) {
+        console.error('URL processing error:', error);
+        alert('URL processing failed: ' + error.message);
+
+        // Reset upload area
+        resetUploadArea();
+    }
+}
+
+function resetUploadArea() {
+    const uploadArea = document.getElementById('upload-area');
+    uploadArea.innerHTML = `
+        <h3>Start New hOCR Correction Session</h3>
+        <p>Upload images or provide an image URL - they'll be processed with hOCR-capable OCR</p>
+
+        <!-- File Upload -->
+        <div class="upload-method">
+            <h4>Upload from Computer</h4>
+            <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.gif,.csv" multiple style="margin: 10px 0;">
             <br>
             <button class="btn btn-primary" onclick="handleUpload()">Upload & Process</button>
-        `;
-    }
+        </div>
+
+        <!-- URL Input -->
+        <div class="upload-method" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #333;">
+            <h4>Process from Image URL</h4>
+            <input type="url" id="url-input" placeholder="https://example.com/image.jpg" style="width: 100%; margin: 10px 0; padding: 8px; border: 1px solid #333; background: #111; color: #fff; border-radius: 4px;">
+            <br>
+            <button class="btn btn-primary" onclick="handleUrlUpload()">Process URL</button>
+        </div>
+    `;
 }
 
 async function loadSession(sessionId) {

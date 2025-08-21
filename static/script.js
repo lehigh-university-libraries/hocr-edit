@@ -1259,3 +1259,59 @@ async function finishSession() {
 window.addEventListener('resize', () => {
     setTimeout(renderHOCROverlay, 100);
 });
+
+// Download formatted hOCR function
+async function downloadFormattedHocr() {
+    if (!hocrData || !hocrData.words || hocrData.words.length === 0) {
+        alert('No hOCR data available to download');
+        return;
+    }
+    
+    try {
+        // Generate the well-formatted hOCR XML
+        const hocrXML = generateHOCRXML(hocrData);
+        
+        // Copy to clipboard
+        await navigator.clipboard.writeText(hocrXML);
+        
+        // Show feedback to user
+        const btn = document.getElementById('download-hocr-btn');
+        const originalText = btn.textContent;
+        btn.textContent = '✅ Copied to Clipboard!';
+        btn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+        
+        // Reset button after 2 seconds
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.background = '';
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Error copying hOCR to clipboard:', error);
+        
+        // Fallback: create download link
+        try {
+            const hocrXML = generateHOCRXML(hocrData);
+            const blob = new Blob([hocrXML], { type: 'text/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `hocr_${currentSession?.id || 'export'}_image_${currentImageIndex + 1}.xml`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            // Show download feedback
+            const btn = document.getElementById('download-hocr-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '📁 Downloaded!';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+        } catch (downloadError) {
+            console.error('Error downloading hOCR:', downloadError);
+            alert('Unable to copy or download hOCR data');
+        }
+    }
+}

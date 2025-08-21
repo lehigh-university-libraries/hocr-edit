@@ -60,19 +60,6 @@ func traverseLinesElements(element XMLElement, lines *[]models.HOCRLine) {
 	}
 }
 
-func traverseElements(element XMLElement, words *[]models.HOCRWord) {
-	if isWordElement(element) {
-		word, err := parseWordElement(element)
-		if err == nil && word.ID != "" {
-			*words = append(*words, word)
-		}
-	}
-
-	for _, child := range element.Children {
-		traverseElements(child, words)
-	}
-}
-
 func traverseElementsWithLineContext(element XMLElement, words *[]models.HOCRWord, currentLineID string) {
 	// Update line ID if this element is a line element
 	if isLineElement(element) {

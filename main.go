@@ -28,5 +28,7 @@ func main() {
 	addr := ":8888"
 	slog.Info("hOCR Editor interface available", "addr", addr)
 
-	http.ListenAndServe(addr, nil)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		utils.ExitOnError("Server failed to start", err)
+	}
 }

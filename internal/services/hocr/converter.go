@@ -71,7 +71,7 @@ func (h *Converter) ConvertHOCRLinesToXML(lines []models.HOCRLine, pageWidth, pa
 
 func (h *Converter) convertHOCRLineToXML(line models.HOCRLine) string {
 	bbox := fmt.Sprintf("bbox %d %d %d %d", line.BBox.X1, line.BBox.Y1, line.BBox.X2, line.BBox.Y2)
-	
+
 	var lineBuilder strings.Builder
 	lineBuilder.WriteString(fmt.Sprintf("<span class='ocr_line' id='%s' title='%s'>", line.ID, bbox))
 
@@ -120,7 +120,6 @@ func (h *Converter) convertPageToLines(page models.Page) []models.HOCRLine {
 	return allLines
 }
 
-
 func (h *Converter) convertBlockToLines(block models.Block) []models.HOCRLine {
 	var allLines []models.HOCRLine
 
@@ -131,7 +130,6 @@ func (h *Converter) convertBlockToLines(block models.Block) []models.HOCRLine {
 
 	return allLines
 }
-
 
 func (h *Converter) convertParagraphToLines(paragraph models.Paragraph) []models.HOCRLine {
 	wordsGroups := h.groupWordsIntoLines(paragraph.Words)
@@ -144,7 +142,7 @@ func (h *Converter) convertParagraphToLines(paragraph models.Paragraph) []models
 
 		lineID := fmt.Sprintf("line_%d", h.lineCounter)
 		lineBBox := h.calculateLineBBoxStruct(wordsGroup)
-		
+
 		var hocrWords []models.HOCRWord
 		for _, gcvWord := range wordsGroup {
 			hocrWord := h.convertGCVWordToHOCRWord(gcvWord, lineID)
@@ -163,7 +161,6 @@ func (h *Converter) convertParagraphToLines(paragraph models.Paragraph) []models
 
 	return lines
 }
-
 
 func (h *Converter) groupWordsIntoLines(words []models.Word) [][]models.Word {
 	if len(words) == 0 {
@@ -201,10 +198,6 @@ func (h *Converter) groupWordsIntoLines(words []models.Word) [][]models.Word {
 	return lines
 }
 
-
-
-
-
 func (h *Converter) calculateLineBBoxStruct(words []models.Word) models.BBox {
 	if len(words) == 0 {
 		return models.BBox{X1: 0, Y1: 0, X2: 0, Y2: 0}
@@ -240,7 +233,7 @@ func (h *Converter) convertGCVWordToHOCRWord(gcvWord models.Word, lineID string)
 	}
 
 	bbox := h.boundingPolyToBBoxStruct(gcvWord.BoundingBox)
-	
+
 	confidence := 95.0
 	if gcvWord.Property != nil && len(gcvWord.Property.DetectedLanguages) > 0 {
 		confidence = gcvWord.Property.DetectedLanguages[0].Confidence * 100

@@ -20,7 +20,7 @@ let pendingAnnotation = null;
 // Load sessions on page load
 document.addEventListener('DOMContentLoaded', loadSessions);
 
-// Global keyboard event listener for tab navigation
+// Global keyboard event listener for navigation
 document.addEventListener('keydown', function(e) {
     // Only handle navigation when correction interface is visible
     if (document.getElementById('correction-section').classList.contains('hidden')) {
@@ -31,9 +31,9 @@ document.addEventListener('keydown', function(e) {
         case 'Tab':
             e.preventDefault();
             if (e.shiftKey) {
-                navigateToPreviousWord();
+                navigateToLineAbove();
             } else {
-                navigateToNextWord();
+                navigateToLineBelow();
             }
             break;
         case 'Enter':
@@ -64,22 +64,6 @@ document.addEventListener('keydown', function(e) {
                 e.preventDefault();
                 toggleDrawingMode();
             }
-            break;
-        case 'ArrowUp':
-            e.preventDefault();
-            navigateToLineAbove();
-            break;
-        case 'ArrowDown':
-            e.preventDefault();
-            navigateToLineBelow();
-            break;
-        case 'ArrowLeft':
-            e.preventDefault();
-            navigateToPreviousWord();
-            break;
-        case 'ArrowRight':
-            e.preventDefault();
-            navigateToNextWord();
             break;
     }
 });
@@ -240,15 +224,31 @@ function showAnnotationModal() {
     };
 }
 
+// Function to renumber all word IDs sequentially
+function renumberWordIds() {
+    if (!hocrData || !hocrData.words) return;
+    
+    // Sort words by reading order first
+    hocrData.words.sort((a, b) => {
+        const yDiff = a.bbox[1] - b.bbox[1];
+        if (Math.abs(yDiff) > 10) {
+            return yDiff;
+        }
+        return a.bbox[0] - b.bbox[0];
+    });
+    
+    // Renumber all words sequentially
+    hocrData.words.forEach((word, index) => {
+        word.id = 'word_' + (index + 1);
+    });
+}
+
 function saveAnnotation() {
     const text = document.getElementById('annotation-text').value.trim();
     if (!text || !pendingAnnotation) {
         cancelAnnotation();
         return;
     }
-    
-    // Generate new word ID
-    const newWordId = 'word_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     
     // Determine line ID (find the closest existing line or create new one)
     let lineId = 'line_new_' + Date.now();
@@ -274,9 +274,9 @@ function saveAnnotation() {
         }
     }
     
-    // Create new word object
+    // Create new word object with temporary ID
     const newWord = {
-        id: newWordId,
+        id: 'temp_word_id',
         text: text,
         bbox: pendingAnnotation.bbox,
         confidence: 95, // High confidence for manually added words
@@ -289,14 +289,8 @@ function saveAnnotation() {
     }
     hocrData.words.push(newWord);
     
-    // Sort words by reading order to maintain proper indexing
-    hocrData.words.sort((a, b) => {
-        const yDiff = a.bbox[1] - b.bbox[1];
-        if (Math.abs(yDiff) > 10) {
-            return yDiff;
-        }
-        return a.bbox[0] - b.bbox[0];
-    });
+    // Renumber all word IDs to maintain proper sequential order
+    renumberWordIds();
     
     // Remove the drawing box since we'll recreate it properly
     if (pendingAnnotation.element) {
@@ -314,12 +308,18 @@ function saveAnnotation() {
     // Close modal and reset
     closeAnnotationModal();
     
-    // Find the index of the newly added word and select it
+    // Find the newly added word by its text and bbox, then select it
     setTimeout(() => {
-        const newWordIndex = hocrData.words.findIndex(w => w.id === newWordId);
+        const newWordIndex = hocrData.words.findIndex(w => 
+            w.text === text && 
+            w.bbox[0] === pendingAnnotation.bbox[0] &&
+            w.bbox[1] === pendingAnnotation.bbox[1] &&
+            w.bbox[2] === pendingAnnotation.bbox[2] &&
+            w.bbox[3] === pendingAnnotation.bbox[3]
+        );
         if (newWordIndex !== -1) {
             currentWordIndex = newWordIndex;
-            selectWord(newWordId);
+            selectWord(hocrData.words[newWordIndex].id);
         }
     }, 100);
 }
@@ -480,6 +480,13 @@ function clearSelection() {
         box.classList.remove('selected');
     });
     
+    // Deactivate dimming overlay and reset clip-path
+    const dimmingOverlay = document.getElementById('dimming-overlay');
+    if (dimmingOverlay) {
+        dimmingOverlay.classList.remove('active');
+        dimmingOverlay.style.clipPath = 'none';
+    }
+    
     document.getElementById('line-editor').style.display = 'none';
     document.getElementById('no-selection').style.display = 'block';
     updateWordCounter();
@@ -630,17 +637,9 @@ async function parseAndDisplayHOCR(hocrXML) {
         });
         hocrData = await response.json();
         
-        // Sort words by reading order (top to bottom, left to right)
+        // Sort words by reading order and renumber them sequentially
         if (hocrData && hocrData.words) {
-            hocrData.words.sort((a, b) => {
-                // Sort by Y position first (top to bottom)
-                const yDiff = a.bbox[1] - b.bbox[1];
-                if (Math.abs(yDiff) > 10) { // Allow some tolerance for same line
-                    return yDiff;
-                }
-                // If roughly same Y, sort by X position (left to right)
-                return a.bbox[0] - b.bbox[0];
-            });
+            renumberWordIds();
             
             // Ensure all words have proper array-format bboxes
             hocrData.words.forEach(word => {
@@ -760,6 +759,46 @@ function selectLine(lineId, lineIndex) {
         lineBox.classList.add('selected');
         currentLineId = lineId;
         currentLineIndex = lineIndex;
+        
+        // Activate dimming overlay with clip-path to exclude selected line
+        const dimmingOverlay = document.getElementById('dimming-overlay');
+        if (dimmingOverlay) {
+            dimmingOverlay.classList.add('active');
+            
+            // Calculate line bounds for clipping
+            const imageContainer = document.getElementById('image-container');
+            const containerRect = imageContainer.getBoundingClientRect();
+            const lineBoxRect = lineBox.getBoundingClientRect();
+            
+            // Convert to percentages relative to image container
+            const left = ((lineBoxRect.left - containerRect.left) / containerRect.width * 100);
+            const top = ((lineBoxRect.top - containerRect.top) / containerRect.height * 100);
+            const right = ((lineBoxRect.right - containerRect.left) / containerRect.width * 100);
+            const bottom = ((lineBoxRect.bottom - containerRect.top) / containerRect.height * 100);
+            
+            // Add some padding around the line
+            const padding = 2; // percentage
+            const clipLeft = Math.max(0, left - padding);
+            const clipTop = Math.max(0, top - padding);
+            const clipRight = Math.min(100, right + padding);
+            const clipBottom = Math.min(100, bottom + padding);
+            
+            // Create clip-path that covers everything except the selected line area
+            const clipPath = `polygon(
+                0% 0%, 
+                0% 100%, 
+                ${clipLeft}% 100%, 
+                ${clipLeft}% ${clipTop}%, 
+                ${clipRight}% ${clipTop}%, 
+                ${clipRight}% ${clipBottom}%, 
+                ${clipLeft}% ${clipBottom}%, 
+                ${clipLeft}% 100%, 
+                100% 100%, 
+                100% 0%
+            )`;
+            
+            dimmingOverlay.style.clipPath = clipPath;
+        }
         
         // Find the first word in the line and select it for editing
         const line = allLines.find(l => l.id === lineId);

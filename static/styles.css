@@ -59,6 +59,23 @@ body {
     pointer-events: none;
     z-index: 2;
 }
+
+.dimming-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 0.3s ease, clip-path 0.3s ease;
+}
+
+.dimming-overlay.active {
+    opacity: 1;
+}
 .hocr-word-box { 
     position: absolute; 
     border: 2px solid #3b82f6; 
@@ -462,11 +479,12 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.3);
     background: rgba(0, 0, 0, 0.1);
     cursor: pointer;
-    transition: all 0.2s ease;
-    z-index: 10;
+    transition: all 0.3s ease;
+    z-index: 4;
     pointer-events: auto;
     min-height: 20px;
     min-width: 20px;
+    transform-origin: center;
 }
 
 .hocr-line-box:hover {
@@ -476,8 +494,14 @@ body {
 
 .hocr-line-box.selected {
     border-color: #3b82f6;
-    background: rgba(59, 130, 246, 0.2);
-    box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+    background: rgba(59, 130, 246, 0.4);
+    box-shadow: 0 0 40px rgba(59, 130, 246, 1.0), 0 0 80px rgba(59, 130, 246, 0.6);
+    z-index: 15;
+    transform: scale(1.05);
+    transition: all 0.3s ease;
+    filter: brightness(1.8) contrast(1.3) saturate(1.2);
+    border-width: 4px;
+    position: relative;
 }
 
 .hocr-line-box.low-confidence {

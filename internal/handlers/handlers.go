@@ -509,7 +509,7 @@ func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Redirect to the session
-		http.Redirect(w, r, "/?session="+sessionID, http.StatusFound)
+		http.Redirect(w, r, "?session="+sessionID, http.StatusFound)
 		return
 	}
 
@@ -525,7 +525,7 @@ func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Redirect to the session
-		http.Redirect(w, r, "/?session="+sessionID, http.StatusFound)
+		http.Redirect(w, r, "?session="+sessionID, http.StatusFound)
 		return
 	}
 

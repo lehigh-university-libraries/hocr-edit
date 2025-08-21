@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/joho/godotenv"
 	"github.com/lehigh-university-libraries/hocr-edit/internal/handlers"
@@ -24,7 +25,13 @@ func main() {
 	http.HandleFunc("/api/hocr/parse", handler.HandleHOCRParse)
 	http.HandleFunc("/api/hocr/update", handler.HandleHOCRUpdate)
 	http.HandleFunc("/", handler.HandleStatic)
-
+	http.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
+		_, err := w.Write([]byte("OK"))
+		if err != nil {
+			slog.Error("Unable to write healthcheck", "err", err)
+			os.Exit(1)
+		}
+	})
 	addr := ":8888"
 	slog.Info("hOCR Editor interface available", "addr", addr)
 

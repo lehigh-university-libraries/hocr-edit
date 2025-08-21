@@ -176,7 +176,9 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
+	// Use filename (without extension) as session name, with timestamp for uniqueness
+	baseFilename := strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
+	sessionID := fmt.Sprintf("%s_%d", baseFilename, time.Now().Unix())
 	session := &models.CorrectionSession{
 		ID:        sessionID,
 		Images:    []models.ImageItem{},

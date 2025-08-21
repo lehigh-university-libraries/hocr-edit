@@ -60,15 +60,17 @@ type CorrectionSession struct {
 }
 
 type ImageItem struct {
-	ID            string `json:"id"`
-	ImagePath     string `json:"image_path"`
-	ImageURL      string `json:"image_url"`
-	OriginalHOCR  string `json:"original_hocr"`
-	CorrectedHOCR string `json:"corrected_hocr"`
-	GroundTruth   string `json:"ground_truth"`
-	Completed     bool   `json:"completed"`
-	ImageWidth    int    `json:"image_width"`
-	ImageHeight   int    `json:"image_height"`
+	ID              string `json:"id"`
+	ImagePath       string `json:"image_path"`
+	ImageURL        string `json:"image_url"`
+	OriginalHOCR    string `json:"original_hocr"`
+	CorrectedHOCR   string `json:"corrected_hocr"`
+	GroundTruth     string `json:"ground_truth"`
+	Completed       bool   `json:"completed"`
+	ImageWidth      int    `json:"image_width"`
+	ImageHeight     int    `json:"image_height"`
+	DrupalUploadURL string `json:"drupal_upload_url,omitempty"`
+	DrupalNid       string `json:"drupal_nid,omitempty"`
 }
 
 type HOCRLine struct {

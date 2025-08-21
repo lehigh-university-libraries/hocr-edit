@@ -670,8 +670,7 @@ async function saveToIslandora() {
     // Check if this is a Drupal session by looking for the upload URL
     const isDrupalSession = currentSession.images && 
                            currentSession.images.length > 0 && 
-                           currentSession.images[0].corrected_hocr && 
-                           currentSession.images[0].corrected_hocr.startsWith('DRUPAL_UPLOAD:');
+                           currentSession.images[0].drupal_upload_url;
 
     if (!isDrupalSession) {
         alert('This session was not created from a Drupal node');
@@ -692,25 +691,23 @@ async function saveToIslandora() {
     button.disabled = true;
 
     try {
-        const response = await fetch('/api/drupal/upload', {
+        const drupalUploadURL = currentSession.images[0].drupal_upload_url;
+        const response = await fetch(drupalUploadURL, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
+                'Content-Type': 'text/vnd.hocr+html',
+                'Content-Location': 'private://derivatives/hocr/gcloud/' + currentSession.images[0].drupal_nid + '.hocr'
             },
-            body: JSON.stringify({
-                session_id: currentSession.id,
-                hocr: hocrData
-            })
+            body: hocrData
         });
 
-        const result = await response.json();
-
         if (!response.ok) {
-            throw new Error(result.error || 'Upload failed');
+            const errorText = await response.text();
+            throw new Error(`Upload failed: HTTP ${response.status} - ${errorText}`);
         }
 
         alert('Successfully saved to Islandora!');
-        console.log('Islandora upload successful:', result.message);
+        console.log('Islandora upload successful:', `HTTP ${response.status}`);
 
     } catch (error) {
         console.error('Islandora upload error:', error);
@@ -740,8 +737,7 @@ function checkForDrupalSession() {
     const isDrupalSession = currentSession && 
                            currentSession.images && 
                            currentSession.images.length > 0 && 
-                           currentSession.images[0].corrected_hocr && 
-                           currentSession.images[0].corrected_hocr.startsWith('DRUPAL_UPLOAD:');
+                           currentSession.images[0].drupal_upload_url;
 
     if (isDrupalSession) {
         button.classList.remove('hidden');

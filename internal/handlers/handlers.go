@@ -567,6 +567,7 @@ func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {
 
 	words, err := parser.ParseHOCRWords(request.HOCR)
 	if err != nil {
+		slog.Error("Unable to parse hocr", "hocr", request.HOCR, "err", err)
 		http.Error(w, "Failed to parse hOCR", http.StatusBadRequest)
 		return
 	}
@@ -711,9 +712,10 @@ func (h *Handler) createSessionFromDrupalNode(nid string) (string, error) {
 	// Find service file and hOCR file
 	var serviceFile, hocrFile *DrupalFileObject
 	for i, fileObj := range drupalData {
-		if fileObj.TermName == "Service File" {
+		switch fileObj.TermName {
+		case "Service File":
 			serviceFile = &drupalData[i]
-		} else if fileObj.TermName == "hOCR" {
+		case "hOCR":
 			hocrFile = &drupalData[i]
 		}
 	}
@@ -726,24 +728,27 @@ func (h *Handler) createSessionFromDrupalNode(nid string) (string, error) {
 		return "", fmt.Errorf("no hOCR file found in Drupal response")
 	}
 
+	baseUrl := strings.Replace(drupalURL, "/node/%s/hocr", "", 1)
 	// Construct image URL from service file
-	imageURL := strings.Replace(drupalURL, "/node/%s/hocr", "", 1) + serviceFile.ViewNode + serviceFile.URI
+	imageURL := baseUrl + serviceFile.ViewNode + serviceFile.URI
 
 	// Construct hOCR upload URL
-	hocrUploadURL := fmt.Sprintf("%s/media/file/%s", serviceFile.ViewNode, hocrFile.TID)
+	hocrUploadURL := fmt.Sprintf("%s/node/%s%s/media/file/%s", baseUrl, nid, serviceFile.ViewNode, hocrFile.TID)
 
 	slog.Info("Retrieved Drupal data", "nid", nid, "image_url", imageURL, "hocr_upload", hocrUploadURL)
 
-	// Check if we should use existing hOCR (if URI contains "gcloud")
+	// Check if we should use existing hOCR (if URI contains "gcloud") or generate new hOCR
 	var sessionID string
 	var sessionErr error
 
 	if strings.Contains(hocrFile.URI, "gcloud") {
 		// Download and use existing hOCR instead of calling Google Cloud Vision
+		slog.Info("Using existing hOCR from Drupal", "nid", nid, "hocr_uri", hocrFile.URI)
 		sessionID, sessionErr = h.createSessionFromDrupalWithExistingHOCR(imageURL, hocrFile.ViewNode+hocrFile.URI, nid)
 	} else {
-		// Create session normally with Google Cloud Vision
-		sessionID, sessionErr = h.createSessionFromURL(imageURL)
+		// Generate new hOCR using Google Cloud Vision API (same as normal image upload)
+		slog.Info("Generating new hOCR via Google Cloud Vision", "nid", nid, "hocr_uri", hocrFile.URI)
+		sessionID, sessionErr = h.createSessionFromDrupalWithNewHOCR(imageURL, nid)
 	}
 
 	if sessionErr != nil {
@@ -756,10 +761,10 @@ func (h *Handler) createSessionFromDrupalNode(nid string) (string, error) {
 		// Add Drupal metadata to session
 		session.Config.Prompt = fmt.Sprintf("Drupal Node %s - %s", nid, session.Config.Prompt)
 
-		// Store upload URL in a way we can retrieve it later
+		// Store upload URL in the new dedicated field
 		if len(session.Images) > 0 {
-			// Store the upload URL in the first image's metadata
-			session.Images[0].CorrectedHOCR = fmt.Sprintf("DRUPAL_UPLOAD:%s", hocrUploadURL)
+			session.Images[0].DrupalUploadURL = hocrUploadURL
+			session.Images[0].DrupalNid = nid
 		}
 
 		h.sessionStore.Set(sessionID, session)
@@ -902,82 +907,150 @@ func (h *Handler) createSessionFromDrupalWithExistingHOCR(imageURL, hocrURL, nid
 	return sessionID, nil
 }
 
-// HandleDrupalHOCRUpload handles uploading HOCR data to Drupal
-func (h *Handler) HandleDrupalHOCRUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var request struct {
-		SessionID string `json:"session_id"`
-		HOCR      string `json:"hocr"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	// Get session to retrieve upload URL
-	session, exists := h.sessionStore.Get(request.SessionID)
-	if !exists {
-		http.Error(w, "Session not found", http.StatusNotFound)
-		return
-	}
-
-	// Extract upload URL from session metadata
-	var uploadURL string
-	if len(session.Images) > 0 && strings.HasPrefix(session.Images[0].CorrectedHOCR, "DRUPAL_UPLOAD:") {
-		uploadURL = strings.TrimPrefix(session.Images[0].CorrectedHOCR, "DRUPAL_UPLOAD:")
-	}
-
-	if uploadURL == "" {
-		http.Error(w, "No Drupal upload URL found for this session", http.StatusBadRequest)
-		return
-	}
-
-	// Upload HOCR to Drupal
-	err := h.uploadHOCRToDrupal(uploadURL, request.HOCR)
+// createSessionFromDrupalWithNewHOCR creates a session and generates new hOCR via Google Cloud Vision
+func (h *Handler) createSessionFromDrupalWithNewHOCR(imageURL, nid string) (string, error) {
+	// Download image from URL (similar to createSessionFromURL)
+	resp, err := http.Get(imageURL)
 	if err != nil {
-		slog.Error("Failed to upload HOCR to Drupal", "error", err, "url", uploadURL)
-		http.Error(w, "Failed to upload to Drupal: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Info("Successfully uploaded HOCR to Drupal", "session", request.SessionID, "url", uploadURL)
-
-	// Return success response
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "HOCR uploaded to Islandora successfully",
-	}); err != nil {
-		slog.Error("Failed to encode success response", "error", err)
-	}
-}
-
-// uploadHOCRToDrupal uploads HOCR data to the specified Drupal endpoint
-func (h *Handler) uploadHOCRToDrupal(uploadURL, hocrData string) error {
-	req, err := http.NewRequest("POST", uploadURL, strings.NewReader(hocrData))
-	if err != nil {
-		return fmt.Errorf("failed to create upload request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "text/vnd.hocr+html")
-	// Note: Content-Location header would need to be dynamically generated based on the node
-	// For now, we'll let Drupal handle the location
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("upload request failed: %w", err)
+		return "", fmt.Errorf("failed to download image: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed with HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)
 	}
 
-	return nil
+	// Read image data
+	imageData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read image data: %w", err)
+	}
+
+	// Get content type from response
+	contentType := resp.Header.Get("Content-Type")
+
+	// Convert JP2/TIFF images using Houdini if needed
+	originalImageData := imageData
+	if needsHoudiniConversion(contentType, imageURL) {
+		slog.Info("Image requires Houdini conversion", "content_type", contentType, "url", imageURL)
+		convertedData, err := h.convertImageViaHoudini(imageData, contentType)
+		if err != nil {
+			return "", fmt.Errorf("failed to convert image via Houdini: %w", err)
+		}
+		imageData = convertedData
+		contentType = "image/jpeg" // Houdini converts to JPEG
+	}
+
+	// Calculate MD5 hash of the original image data for consistent caching
+	md5Hash := utils.CalculateDataMD5(originalImageData)
+
+	// Extract filename from URL or use md5 hash
+	filename := md5Hash
+	if urlParts := strings.Split(imageURL, "/"); len(urlParts) > 0 {
+		lastPart := urlParts[len(urlParts)-1]
+		if lastPart != "" && strings.Contains(lastPart, ".") {
+			filename = strings.TrimSuffix(lastPart, filepath.Ext(lastPart))
+		}
+	}
+
+	// Use NID in session name for Drupal sessions
+	sessionID := fmt.Sprintf("drupal_%s_%s_%d", nid, filename, time.Now().Unix())
+
+	// Determine file extension from content type (which may have been updated by Houdini conversion)
+	ext := ".jpg" // default
+	switch contentType {
+	case "image/png":
+		ext = ".png"
+	case "image/gif":
+		ext = ".gif"
+	case "image/webp":
+		ext = ".webp"
+	default:
+		// Try to get extension from URL
+		if urlExt := filepath.Ext(imageURL); urlExt != "" {
+			ext = urlExt
+		}
+	}
+
+	uploadsDir := "uploads"
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create uploads directory: %w", err)
+	}
+
+	imageFilename := md5Hash + ext
+	hocrFilename := md5Hash + ".xml"
+	imageFilePath := filepath.Join(uploadsDir, imageFilename)
+	hocrFilePath := filepath.Join(uploadsDir, hocrFilename)
+
+	// Save image file
+	if err := os.WriteFile(imageFilePath, imageData, 0644); err != nil {
+		return "", fmt.Errorf("failed to save image: %w", err)
+	}
+
+	slog.Info("Image downloaded and saved", "filename", imageFilename, "md5", md5Hash, "url", imageURL)
+
+	// Get image dimensions
+	width, height := utils.GetImageDimensions(imageFilePath)
+
+	// Process hOCR (check cache first, then generate via Google Cloud Vision)
+	var hocrXML string
+	if _, err := os.Stat(hocrFilePath); err == nil {
+		hocrData, err := os.ReadFile(hocrFilePath)
+		if err != nil {
+			slog.Warn("Failed to read existing hOCR file", "error", err, "path", hocrFilePath)
+			hocrXML, err = h.getOCRForImage(imageFilePath)
+			if err != nil {
+				return "", fmt.Errorf("failed to process image with OCR: %w", err)
+			}
+			if err := os.WriteFile(hocrFilePath, []byte(hocrXML), 0644); err != nil {
+				slog.Warn("Failed to save hOCR file", "error", err)
+			}
+		} else {
+			hocrXML = string(hocrData)
+			slog.Info("Using cached hOCR", "filename", hocrFilename)
+		}
+	} else {
+		slog.Info("Generating new hOCR via Google Cloud Vision", "filename", imageFilename)
+		hocrXML, err = h.getOCRForImage(imageFilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to process image with OCR: %w", err)
+		}
+
+		if err := os.WriteFile(hocrFilePath, []byte(hocrXML), 0644); err != nil {
+			slog.Warn("Failed to save hOCR file", "error", err)
+		} else {
+			slog.Info("hOCR cached", "filename", hocrFilename)
+		}
+	}
+
+	// Create session
+	session := &models.CorrectionSession{
+		ID:        sessionID,
+		Images:    []models.ImageItem{},
+		Current:   0,
+		CreatedAt: time.Now(),
+		Config: models.EvalConfig{
+			Model:       "google_cloud_vision",
+			Prompt:      "Google Cloud Vision OCR with hOCR conversion for Drupal",
+			Temperature: 0.0,
+			Timestamp:   time.Now().Format("2006-01-02_15-04-05"),
+		},
+	}
+
+	imageItem := models.ImageItem{
+		ID:            "img_1",
+		ImagePath:     imageFilename,
+		ImageURL:      "/static/uploads/" + imageFilename,
+		OriginalHOCR:  hocrXML,
+		CorrectedHOCR: "",
+		Completed:     false,
+		ImageWidth:    width,
+		ImageHeight:   height,
+	}
+
+	session.Images = []models.ImageItem{imageItem}
+	h.sessionStore.Set(sessionID, session)
+
+	slog.Info("Session created from Drupal with new hOCR", "session_id", sessionID, "nid", nid)
+	return sessionID, nil
 }

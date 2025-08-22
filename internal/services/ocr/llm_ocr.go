@@ -90,7 +90,7 @@ func (s *LLMOCRService) ProcessImage(imagePath string) (models.GCVResponse, erro
 
 	// Map the recognized text back to the original boundary boxes
 	correctedResponse := s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder)
-	
+
 	slog.Info("Completed LLM OCR processing", "original_words", len(wordOrder), "corrected_response_ready", true)
 	return correctedResponse, nil
 }
@@ -307,9 +307,6 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 		return "", fmt.Errorf("failed to encode image: %w", err)
 	}
 
-	// Simple prompt for OCR
-	prompt := "Extract all text from this image. Each line in the image represents one word. Return only the text, one word per line, in the order they appear from top to bottom. Do not add any explanations or formatting."
-
 	// Create OpenAI request
 	request := OpenAIRequest{
 		Model:       s.getModel(),
@@ -320,7 +317,12 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 				Content: []Content{
 					{
 						Type: "text",
-						Text: prompt,
+						Text: `Extract all text from this image.
+						Each line in the image has one to five word(s).
+						In your response, return only the text, one line per line, in the order they appear from top to bottom.
+						Do not add any explanations or formatting.
+						None of the lines repeat, so if you're going to repeat the same line twice, try harder.
+						Though it's possible the same line is repeated later in the document, the likelyhood of two lines being the same is very unlikely. `,
 					},
 					{
 						Type: "image_url",
@@ -333,7 +335,7 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 		},
 	}
 
-	slog.Info("Making OpenAI API call", "model", request.Model, "prompt_length", len(prompt))
+	slog.Info("Making OpenAI API call", "model", request.Model)
 
 	// Call OpenAI API
 	response, err := s.callOpenAI(request)
@@ -344,7 +346,7 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 
 	cleanResponse := strings.TrimSpace(response)
 	slog.Info("OpenAI API call successful", "response_length", len(cleanResponse), "response", cleanResponse)
-	
+
 	return cleanResponse, nil
 }
 

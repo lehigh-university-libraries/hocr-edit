@@ -8,6 +8,7 @@ import (
 	"image"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,7 +33,7 @@ func NewLLMOCR() *LLMOCRService {
 
 type OpenAIRequest struct {
 	Model       string    `json:"model"`
-	Temperature float64   `json:"temperature"`
+	Temperature float64   `json:"temperature,omitempty"`
 	Messages    []Message `json:"messages"`
 }
 
@@ -309,8 +310,7 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 
 	// Create OpenAI request
 	request := OpenAIRequest{
-		Model:       s.getModel(),
-		Temperature: 0.0,
+		Model: s.getModel(),
 		Messages: []Message{
 			{
 				Role: "user",
@@ -414,7 +414,7 @@ func max(a, b int) int {
 func (s *LLMOCRService) getModel() string {
 	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
-		return "gpt-4o"
+		return "gpt-5"
 	}
 	return model
 }
@@ -438,40 +438,74 @@ func (s *LLMOCRService) callOpenAI(request OpenAIRequest) (string, error) {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(requestBody))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+	const maxRetries = 5
+	const baseDelay = 1 * time.Second
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(requestBody))
+		if err != nil {
+			return "", fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+
+		client := &http.Client{
+			Timeout: 600 * time.Second,
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt == maxRetries {
+				return "", fmt.Errorf("failed to make request after %d attempts: %w", maxRetries+1, err)
+			}
+			delay := time.Duration(math.Pow(2, float64(attempt))) * baseDelay
+			slog.Warn("Request failed, retrying", "attempt", attempt+1, "delay", delay, "error", err)
+			time.Sleep(delay)
+			continue
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if readErr != nil {
+			if attempt == maxRetries {
+				return "", fmt.Errorf("failed to read response body after %d attempts: %w", maxRetries+1, readErr)
+			}
+			delay := time.Duration(math.Pow(2, float64(attempt))) * baseDelay
+			slog.Warn("Failed to read response body, retrying", "attempt", attempt+1, "delay", delay, "error", readErr)
+			time.Sleep(delay)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusBadGateway {
+			if attempt == maxRetries {
+				return "", fmt.Errorf("OpenAI API returned 502 Bad Gateway after %d attempts: %s", maxRetries+1, string(body))
+			}
+			delay := time.Duration(math.Pow(2, float64(attempt))) * baseDelay
+			slog.Warn("Received 502 Bad Gateway, retrying with exponential backoff", "attempt", attempt+1, "delay", delay)
+			time.Sleep(delay)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("OpenAI API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var openAIResponse OpenAIResponse
+		if err := json.Unmarshal(body, &openAIResponse); err != nil {
+			return "", fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		if len(openAIResponse.Choices) == 0 {
+			return "", fmt.Errorf("no response from OpenAI")
+		}
+
+		slog.Info("OpenAI response received", "length", len(openAIResponse.Choices[0].Message.Content), "attempt", attempt+1)
+		return openAIResponse.Choices[0].Message.Content, nil
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{
-		Timeout: 600 * time.Second,
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to make request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("OpenAI API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var openAIResponse OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResponse); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if len(openAIResponse.Choices) == 0 {
-		return "", fmt.Errorf("no response from OpenAI")
-	}
-
-	slog.Info("OpenAI response received", "length", len(openAIResponse.Choices[0].Message.Content))
-	return openAIResponse.Choices[0].Message.Content, nil
+	return "", fmt.Errorf("unreachable code")
 }
 
 func (s *LLMOCRService) GetDetectionMethod() string {

@@ -66,8 +66,9 @@ func (s *WordDetectionService) detectWordBoxes(imagePath string, width, height i
 		"-colorspace", "Gray",
 		"-normalize",
 		"-threshold", "50%",
-		"-morphology", "Close", "Rectangle:3x1",
-		"-morphology", "Open", "Rectangle:1x3",
+		"-morphology", "Close", "Rectangle:5x1",
+		"-morphology", "Open", "Rectangle:1x2",
+		"-morphology", "Close", "Rectangle:2x1",
 		processedPath)
 	slog.Info("Converting image", "cmd", cmd.String())
 	if err := cmd.Run(); err != nil {
@@ -120,7 +121,7 @@ func (s *WordDetectionService) findConnectedComponents(img image.Image) []Boundi
 				// Only keep components of reasonable size (filter noise)
 				w := maxX - minX + 1
 				h := maxY - minY + 1
-				if w >= 3 && h >= 3 && w <= width/3 && h <= height/3 {
+				if w >= 5 && h >= 8 && w <= width/2 && h <= height/4 {
 					components = append(components, BoundingBox{
 						X:      minX,
 						Y:      minY,
@@ -210,7 +211,7 @@ func (s *WordDetectionService) groupComponentsIntoWords(components []BoundingBox
 		heightDiff := abs(component.Height - avgHeight)
 
 		// Group if: on same line (small Y diff), close together (reasonable X gap), similar size
-		if yDiff <= avgHeight/3 && xGap <= avgHeight*2 && heightDiff <= avgHeight/2 {
+		if yDiff <= avgHeight/2 && xGap <= avgHeight*4 && heightDiff <= avgHeight {
 			currentWordComponents = append(currentWordComponents, component)
 		} else {
 			// Finish current word and start new one

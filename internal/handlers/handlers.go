@@ -471,18 +471,24 @@ func (h *Handler) createSessionFromURL(imageURL string) (string, error) {
 }
 
 func (h *Handler) getOCRForImage(imagePath string) (string, error) {
+	// Check if we should use direct hOCR processing (for LLM OCR)
+	if h.ocrService.GetDetectionMethod() == "llm_with_boundary_boxes" {
+		return h.ocrService.ProcessImageToHOCR(imagePath)
+	}
+
+	// Use traditional path: OCR -> GCVResponse -> hOCR conversion
 	gcvResponse, err := h.ocrService.ProcessImage(imagePath)
 	if err != nil {
 		return "", err
 	}
 
 	converter := hocr.NewConverter()
-	hocr, err := converter.ConvertToHOCR(gcvResponse)
+	hocrResult, err := converter.ConvertToHOCR(gcvResponse)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert to hOCR: %w", err)
 	}
 
-	return hocr, nil
+	return hocrResult, nil
 }
 
 func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {

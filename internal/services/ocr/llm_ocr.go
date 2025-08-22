@@ -77,6 +77,8 @@ func (s *LLMOCRService) ProcessImage(imagePath string) (models.GCVResponse, erro
 	}
 	//	defer os.Remove(stitchedImagePath) // Clean up temp file
 
+	slog.Info("Sending stitched image to LLM", "image_path", stitchedImagePath)
+
 	// Get text from LLM using the stitched image
 	recognizedText, err := s.getTextFromLLM(stitchedImagePath)
 	if err != nil {
@@ -84,8 +86,13 @@ func (s *LLMOCRService) ProcessImage(imagePath string) (models.GCVResponse, erro
 		return boundaryBoxResponse, nil
 	}
 
+	slog.Info("LLM returned text", "text", recognizedText, "text_length", len(recognizedText))
+
 	// Map the recognized text back to the original boundary boxes
-	return s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder), nil
+	correctedResponse := s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder)
+	
+	slog.Info("Completed LLM OCR processing", "original_words", len(wordOrder), "corrected_response_ready", true)
+	return correctedResponse, nil
 }
 
 func (s *LLMOCRService) ProcessImageToHOCR(imagePath string) (string, error) {
@@ -107,6 +114,7 @@ func (s *LLMOCRService) ProcessImageToHOCR(imagePath string) (string, error) {
 	defer os.Remove(stitchedImagePath) // Clean up temp file
 
 	slog.Info("Created stitched word image", "path", stitchedImagePath, "word_count", len(wordOrder))
+	slog.Info("Sending stitched image to LLM for text recognition", "image_path", stitchedImagePath)
 
 	// Get text from LLM using the stitched image
 	recognizedText, err := s.getTextFromLLM(stitchedImagePath)
@@ -116,10 +124,12 @@ func (s *LLMOCRService) ProcessImageToHOCR(imagePath string) (string, error) {
 		return converter.ConvertToHOCR(boundaryBoxResponse)
 	}
 
-	slog.Info("LLM text recognition completed", "text_length", len(recognizedText))
+	slog.Info("LLM text recognition completed", "text", recognizedText, "text_length", len(recognizedText))
 
 	// Map the recognized text back to the original boundary boxes
 	correctedResponse := s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder)
+
+	slog.Info("Text mapped back to word boxes, converting to hOCR", "corrected_words", s.countWords(correctedResponse))
 
 	// Convert to hOCR
 	converter := hocr.NewConverter()
@@ -323,13 +333,19 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 		},
 	}
 
+	slog.Info("Making OpenAI API call", "model", request.Model, "prompt_length", len(prompt))
+
 	// Call OpenAI API
 	response, err := s.callOpenAI(request)
 	if err != nil {
+		slog.Error("OpenAI API call failed", "error", err)
 		return "", fmt.Errorf("OpenAI API call failed: %w", err)
 	}
 
-	return strings.TrimSpace(response), nil
+	cleanResponse := strings.TrimSpace(response)
+	slog.Info("OpenAI API call successful", "response_length", len(cleanResponse), "response", cleanResponse)
+	
+	return cleanResponse, nil
 }
 
 func (s *LLMOCRService) mapTextToWordBoxes(recognizedText string, originalResponse models.GCVResponse, wordOrder []WordInfo) models.GCVResponse {

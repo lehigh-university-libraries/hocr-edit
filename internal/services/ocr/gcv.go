@@ -2,6 +2,7 @@ package ocr
 
 import (
 	"context"
+	"log/slog"
 	"os"
 
 	vision "cloud.google.com/go/vision/apiv1"
@@ -19,7 +20,7 @@ type Service struct {
 
 func New() *Service {
 	// Check environment variables to determine which service to use
-	useLLMOCR := true
+	useLLMOCR := os.Getenv("USE_LLM_OCR") != ""
 	useWordDetection := !useLLMOCR && os.Getenv("GOOGLE_CLOUD_VISION_ENABLED") == ""
 
 	service := &Service{
@@ -28,9 +29,13 @@ func New() *Service {
 	}
 
 	if useLLMOCR {
+		slog.Info("Initializing LLM OCR service (word detection + OpenAI)")
 		service.llmOCRSvc = NewLLMOCR()
 	} else if useWordDetection {
+		slog.Info("Initializing custom word detection service")
 		service.wordDetectionSvc = NewWordDetection()
+	} else {
+		slog.Info("Initializing Google Cloud Vision service")
 	}
 
 	return service

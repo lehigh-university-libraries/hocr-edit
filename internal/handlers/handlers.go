@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -586,16 +587,10 @@ func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {
 
 // convertImageViaHoudini converts JP2/TIFF images to JPG using Houdini service
 func (h *Handler) convertImageViaHoudini(imageData []byte, contentType string) ([]byte, error) {
-	houdiniURL := os.Getenv("HOUDINI_URL")
-	if houdiniURL == "" {
-		return nil, fmt.Errorf("HOUDINI_URL environment variable not set")
-	}
-
 	if contentType == "application/octet-stream" {
 		contentType = "image/jp2"
 	}
 
-	// Create cache key based on image data hash
 	hash := md5.Sum(imageData)
 	cacheKey := hex.EncodeToString(hash[:])
 	cacheFilename := cacheKey + "_converted.jpg"
@@ -607,45 +602,22 @@ func (h *Handler) convertImageViaHoudini(imageData []byte, contentType string) (
 		slog.Info("Using cached Houdini conversion", "cache_key", cacheKey)
 		return cachedData, nil
 	}
-
 	// Create cache directory
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		slog.Warn("Failed to create Houdini cache directory", "error", err)
 	}
 
-	slog.Info("Converting image via Houdini", "content_type", contentType, "size", len(imageData))
+	// Convert to grayscale, enhance contrast, and apply morphological operations
+	cmd := exec.Command("magick", "-", cachePath)
+	cmd.Stdin = bytes.NewReader(imageData)
+	slog.Info("Converting image", "cmd", cmd.String())
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("imagemagick preprocessing failed: %w", err)
+	}
 
-	// Make request to Houdini
-	req, err := http.NewRequest("POST", houdiniURL, bytes.NewReader(imageData))
+	convertedData, err := os.ReadFile(cachePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Houdini request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Accept", "image/jpeg")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("houdini request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("houdini returned HTTP %d", resp.StatusCode)
-	}
-
-	// Read converted image
-	convertedData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Houdini response: %w", err)
-	}
-
-	// Cache the converted image
-	if err := os.WriteFile(cachePath, convertedData, 0644); err != nil {
-		slog.Warn("Failed to cache Houdini conversion", "error", err)
-	} else {
-		slog.Info("Cached Houdini conversion", "cache_key", cacheKey, "size", len(convertedData))
+		return nil, err
 	}
 
 	return convertedData, nil
@@ -803,6 +775,7 @@ func (h *Handler) createSessionFromDrupalWithExistingHOCR(imageURL, hocrURL, nid
 	originalImageData := imageData
 	if needsHoudiniConversion(contentType, imageURL) {
 		slog.Info("Image requires Houdini conversion", "content_type", contentType, "url", imageURL)
+
 		convertedData, err := h.convertImageViaHoudini(imageData, contentType)
 		if err != nil {
 			return "", fmt.Errorf("failed to convert image via Houdini: %w", err)

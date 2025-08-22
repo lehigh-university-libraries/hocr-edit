@@ -1,6 +1,6 @@
 module github.com/lehigh-university-libraries/hocr-edit
 
-go 1.24.5
+go 1.24.3
 
 require (
 	cloud.google.com/go/vision v1.2.0

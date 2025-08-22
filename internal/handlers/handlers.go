@@ -218,8 +218,8 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Current:   0,
 		CreatedAt: time.Now(),
 		Config: models.EvalConfig{
-			Model:       "google_cloud_vision",
-			Prompt:      "Google Cloud Vision OCR with hOCR conversion",
+			Model:       h.ocrService.GetDetectionMethod(),
+			Prompt:      fmt.Sprintf("%s OCR with hOCR conversion", h.ocrService.GetDetectionMethod()),
 			Temperature: 0.0,
 			Timestamp:   time.Now().Format("2006-01-02_15-04-05"),
 		},
@@ -444,8 +444,8 @@ func (h *Handler) createSessionFromURL(imageURL string) (string, error) {
 		Current:   0,
 		CreatedAt: time.Now(),
 		Config: models.EvalConfig{
-			Model:       "google_cloud_vision",
-			Prompt:      "Google Cloud Vision OCR with hOCR conversion",
+			Model:       h.ocrService.GetDetectionMethod(),
+			Prompt:      fmt.Sprintf("%s OCR with hOCR conversion", h.ocrService.GetDetectionMethod()),
 			Temperature: 0.0,
 			Timestamp:   time.Now().Format("2006-01-02_15-04-05"),
 		},
@@ -509,7 +509,7 @@ func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Redirect to the session
-		http.Redirect(w, r, "?session="+sessionID, http.StatusFound)
+		http.Redirect(w, r, "/hocr/?session="+sessionID, http.StatusFound)
 		return
 	}
 
@@ -525,7 +525,7 @@ func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Redirect to the session
-		http.Redirect(w, r, "?session="+sessionID, http.StatusFound)
+		http.Redirect(w, r, "/hocr/?session="+sessionID, http.StatusFound)
 		return
 	}
 
@@ -589,6 +589,10 @@ func (h *Handler) convertImageViaHoudini(imageData []byte, contentType string) (
 	houdiniURL := os.Getenv("HOUDINI_URL")
 	if houdiniURL == "" {
 		return nil, fmt.Errorf("HOUDINI_URL environment variable not set")
+	}
+
+	if contentType == "application/octet-stream" {
+		contentType = "image/jp2"
 	}
 
 	// Create cache key based on image data hash

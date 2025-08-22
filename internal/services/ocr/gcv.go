@@ -9,13 +9,33 @@ import (
 	"github.com/lehigh-university-libraries/hocr-edit/internal/models"
 )
 
-type Service struct{}
+type Service struct {
+	useWordDetection bool
+	wordDetectionSvc *WordDetectionService
+}
 
 func New() *Service {
-	return &Service{}
+	// Check environment variable to determine which service to use
+	useWordDetection := true
+
+	service := &Service{
+		useWordDetection: useWordDetection,
+	}
+
+	if useWordDetection {
+		service.wordDetectionSvc = NewWordDetection()
+	}
+
+	return service
 }
 
 func (s *Service) ProcessImage(imagePath string) (models.GCVResponse, error) {
+	// Use word detection service if enabled
+	if s.useWordDetection {
+		return s.wordDetectionSvc.ProcessImage(imagePath)
+	}
+
+	// Otherwise use Google Cloud Vision
 	ctx := context.Background()
 
 	client, err := vision.NewImageAnnotatorClient(ctx)
@@ -41,6 +61,14 @@ func (s *Service) ProcessImage(imagePath string) (models.GCVResponse, error) {
 	}
 
 	return convertVisionResponseToGCV(annotation), nil
+}
+
+func (s *Service) GetDetectionMethod() string {
+	if os.Getenv("GOOGLE_CLOUD_VISION_ENABLED") != "" {
+		return "google_cloud_vision"
+	}
+	return "custom_word_detection"
+
 }
 
 func convertVisionResponseToGCV(annotation *visionpb.TextAnnotation) models.GCVResponse {

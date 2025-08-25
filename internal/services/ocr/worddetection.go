@@ -342,41 +342,173 @@ func (s *WordDetectionService) groupWordsIntoParagraphs(words []models.Word) []m
 		return []models.Paragraph{}
 	}
 
-	var paragraphs []models.Paragraph
-	var currentParagraphWords []models.Word
+	// First, group words into lines based on Y-coordinate overlap
+	lines := s.groupWordsIntoLines(words)
 
-	for _, word := range words {
-		if len(currentParagraphWords) == 0 {
-			currentParagraphWords = append(currentParagraphWords, word)
+	// Then group lines into paragraphs based on spacing
+	return s.groupLinesIntoParagraphs(lines)
+}
+
+func (s *WordDetectionService) groupWordsIntoLines(words []models.Word) [][]models.Word {
+	if len(words) == 0 {
+		return [][]models.Word{}
+	}
+
+	// Sort words by Y coordinate first, then by X coordinate
+	sortedWords := make([]models.Word, len(words))
+	copy(sortedWords, words)
+	sort.Slice(sortedWords, func(i, j int) bool {
+		yI := sortedWords[i].BoundingBox.Vertices[0].Y
+		yJ := sortedWords[j].BoundingBox.Vertices[0].Y
+		if yI == yJ {
+			return sortedWords[i].BoundingBox.Vertices[0].X < sortedWords[j].BoundingBox.Vertices[0].X
+		}
+		return yI < yJ
+	})
+
+	var lines [][]models.Word
+
+	for _, word := range sortedWords {
+		wordTop := word.BoundingBox.Vertices[0].Y
+		wordBottom := word.BoundingBox.Vertices[2].Y
+		wordHeight := wordBottom - wordTop
+
+		// Find if this word belongs to an existing line
+		foundLine := false
+		for i, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+
+			// Calculate the Y-range of the current line
+			lineTop := line[0].BoundingBox.Vertices[0].Y
+			lineBottom := line[0].BoundingBox.Vertices[2].Y
+
+			for _, lineWord := range line {
+				wordLineTop := lineWord.BoundingBox.Vertices[0].Y
+				wordLineBottom := lineWord.BoundingBox.Vertices[2].Y
+				if wordLineTop < lineTop {
+					lineTop = wordLineTop
+				}
+				if wordLineBottom > lineBottom {
+					lineBottom = wordLineBottom
+				}
+			}
+
+			// Check if the word's Y-range overlaps with the line's Y-range
+			// Allow some tolerance (half the word height) to account for slight misalignment
+			tolerance := wordHeight / 2
+			wordOverlapsLine := !(wordBottom < lineTop-tolerance || wordTop > lineBottom+tolerance)
+
+			if wordOverlapsLine {
+				lines[i] = append(lines[i], word)
+				foundLine = true
+				break
+			}
+		}
+
+		if !foundLine {
+			// Create a new line for this word
+			lines = append(lines, []models.Word{word})
+		}
+	}
+
+	// Sort words within each line by X coordinate
+	for i := range lines {
+		sort.Slice(lines[i], func(j, k int) bool {
+			return lines[i][j].BoundingBox.Vertices[0].X < lines[i][k].BoundingBox.Vertices[0].X
+		})
+	}
+
+	return lines
+}
+
+func (s *WordDetectionService) groupLinesIntoParagraphs(lines [][]models.Word) []models.Paragraph {
+	if len(lines) == 0 {
+		return []models.Paragraph{}
+	}
+
+	var paragraphs []models.Paragraph
+	var currentParagraphLines [][]models.Word
+
+	for _, line := range lines {
+		if len(line) == 0 {
 			continue
 		}
 
-		// Simple line break detection based on Y coordinate difference
-		lastWord := currentParagraphWords[len(currentParagraphWords)-1]
-		lastY := lastWord.BoundingBox.Vertices[0].Y
-		currentY := word.BoundingBox.Vertices[0].Y
+		if len(currentParagraphLines) == 0 {
+			currentParagraphLines = append(currentParagraphLines, line)
+			continue
+		}
 
-		// Estimate line height from word height
-		wordHeight := lastWord.BoundingBox.Vertices[2].Y - lastWord.BoundingBox.Vertices[0].Y
+		// Calculate the vertical gap between the last line and current line
+		lastLine := currentParagraphLines[len(currentParagraphLines)-1]
+		if len(lastLine) == 0 {
+			currentParagraphLines = append(currentParagraphLines, line)
+			continue
+		}
 
-		// If Y difference is more than 1.5x word height, start new paragraph
-		if abs(currentY-lastY) > wordHeight*3/2 {
+		// Get the bottom Y of the last line
+		lastLineBottom := 0
+		for _, word := range lastLine {
+			wordBottom := word.BoundingBox.Vertices[2].Y
+			if wordBottom > lastLineBottom {
+				lastLineBottom = wordBottom
+			}
+		}
+
+		// Get the top Y of the current line
+		currentLineTop := line[0].BoundingBox.Vertices[0].Y
+		for _, word := range line {
+			wordTop := word.BoundingBox.Vertices[0].Y
+			if wordTop < currentLineTop {
+				currentLineTop = wordTop
+			}
+		}
+
+		// Estimate line height from the current line
+		lineHeight := 0
+		for _, word := range line {
+			wordHeight := word.BoundingBox.Vertices[2].Y - word.BoundingBox.Vertices[0].Y
+			if wordHeight > lineHeight {
+				lineHeight = wordHeight
+			}
+		}
+
+		verticalGap := currentLineTop - lastLineBottom
+
+		// Start new paragraph if gap is more than 2x line height
+		if verticalGap > lineHeight*2 {
 			// Finish current paragraph
-			paragraph := s.createParagraphFromWords(currentParagraphWords)
-			paragraphs = append(paragraphs, paragraph)
-			currentParagraphWords = []models.Word{word}
+			paragraphWords := s.flattenLines(currentParagraphLines)
+			if len(paragraphWords) > 0 {
+				paragraph := s.createParagraphFromWords(paragraphWords)
+				paragraphs = append(paragraphs, paragraph)
+			}
+			currentParagraphLines = [][]models.Word{line}
 		} else {
-			currentParagraphWords = append(currentParagraphWords, word)
+			currentParagraphLines = append(currentParagraphLines, line)
 		}
 	}
 
 	// Don't forget the last paragraph
-	if len(currentParagraphWords) > 0 {
-		paragraph := s.createParagraphFromWords(currentParagraphWords)
-		paragraphs = append(paragraphs, paragraph)
+	if len(currentParagraphLines) > 0 {
+		paragraphWords := s.flattenLines(currentParagraphLines)
+		if len(paragraphWords) > 0 {
+			paragraph := s.createParagraphFromWords(paragraphWords)
+			paragraphs = append(paragraphs, paragraph)
+		}
 	}
 
 	return paragraphs
+}
+
+func (s *WordDetectionService) flattenLines(lines [][]models.Word) []models.Word {
+	var words []models.Word
+	for _, line := range lines {
+		words = append(words, line...)
+	}
+	return words
 }
 
 func (s *WordDetectionService) createParagraphFromWords(words []models.Word) models.Paragraph {

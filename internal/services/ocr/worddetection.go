@@ -23,7 +23,7 @@ func NewWordDetection() *WordDetectionService {
 	return &WordDetectionService{}
 }
 
-type BoundingBox struct {
+type LineBoundingBox struct {
 	X, Y, Width, Height int
 }
 
@@ -44,31 +44,29 @@ func (s *WordDetectionService) ProcessImage(imagePath string) (models.GCVRespons
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	// Convert to grayscale and process
-	wordBoxes, err := s.detectWordBoxes(imagePath, width, height)
+	// Detect text lines in the image
+	lineBoxes, err := s.detectTextLines(imagePath, width, height)
 	if err != nil {
-		return models.GCVResponse{}, fmt.Errorf("failed to detect word boxes: %w", err)
+		return models.GCVResponse{}, fmt.Errorf("failed to detect text lines: %w", err)
 	}
 
 	// Convert to GCV-compatible response format
-	return s.convertToGCVResponse(wordBoxes, width, height), nil
+	return s.convertLinesToGCVResponse(lineBoxes, width, height), nil
 }
 
-func (s *WordDetectionService) detectWordBoxes(imagePath string, width, height int) ([]BoundingBox, error) {
-	// Use ImageMagick to preprocess the image for text detection
+func (s *WordDetectionService) detectTextLines(imagePath string, width, height int) ([]LineBoundingBox, error) {
+	// Use ImageMagick to preprocess the image for line detection
 	tempDir := "/tmp"
 	baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
 	processedPath := fmt.Sprintf("%s/processed_%s.jpg", tempDir, strings.ReplaceAll(baseName, "/", "_"))
-	defer os.Remove(processedPath)
+//	defer os.Remove(processedPath)
 
-	// Convert to grayscale, enhance contrast, and apply morphological operations
+	// Convert to grayscale and gently enhance for both printed and handwritten text
 	cmd := exec.Command("magick", imagePath,
 		"-colorspace", "Gray",
-		"-normalize",
-		"-threshold", "50%",
-		"-morphology", "Close", "Rectangle:5x1",
-		"-morphology", "Open", "Rectangle:1x2",
-		"-morphology", "Close", "Rectangle:2x1",
+		"-contrast-stretch", "0.15x0.05%",
+		"-sharpen", "0x1",
+		"-threshold", "75%",
 		processedPath)
 	slog.Info("Converting image", "cmd", cmd.String())
 	if err := cmd.Run(); err != nil {
@@ -90,13 +88,13 @@ func (s *WordDetectionService) detectWordBoxes(imagePath string, width, height i
 	// Find connected components (text regions)
 	components := s.findConnectedComponents(img)
 
-	// Group components into words based on proximity
-	wordBoxes := s.groupComponentsIntoWords(components, width, height)
+	// Group components into text lines based on Y-coordinate
+	lineBoxes := s.groupComponentsIntoLines(components, width, height)
 
-	return wordBoxes, nil
+	return lineBoxes, nil
 }
 
-func (s *WordDetectionService) findConnectedComponents(img image.Image) []BoundingBox {
+func (s *WordDetectionService) findConnectedComponents(img image.Image) []LineBoundingBox {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -107,7 +105,7 @@ func (s *WordDetectionService) findConnectedComponents(img image.Image) []Boundi
 		visited[i] = make([]bool, width)
 	}
 
-	var components []BoundingBox
+	var components []LineBoundingBox
 
 	// Find all connected components using flood fill
 	for y := range height {
@@ -122,7 +120,7 @@ func (s *WordDetectionService) findConnectedComponents(img image.Image) []Boundi
 				w := maxX - minX + 1
 				h := maxY - minY + 1
 				if w >= 5 && h >= 8 && w <= width/2 && h <= height/4 {
-					components = append(components, BoundingBox{
+					components = append(components, LineBoundingBox{
 						X:      minX,
 						Y:      minY,
 						Width:  w,
@@ -173,68 +171,69 @@ func (s *WordDetectionService) isTextPixel(c color.Color) bool {
 	return gray < 32768
 }
 
-func (s *WordDetectionService) groupComponentsIntoWords(components []BoundingBox, imgWidth, imgHeight int) []BoundingBox {
+func (s *WordDetectionService) groupComponentsIntoLines(components []LineBoundingBox, imgWidth, imgHeight int) []LineBoundingBox {
 	if len(components) == 0 {
 		return components
 	}
 
-	// Sort components by Y coordinate, then by X
+	// Sort components by Y coordinate first for line grouping
 	sort.Slice(components, func(i, j int) bool {
-		if components[i].Y == components[j].Y {
-			return components[i].X < components[j].X
-		}
 		return components[i].Y < components[j].Y
 	})
 
-	var wordBoxes []BoundingBox
-	var currentWordComponents []BoundingBox
+	var lineBoxes []LineBoundingBox
+	var currentLineComponents []LineBoundingBox
 
 	for _, component := range components {
-		if len(currentWordComponents) == 0 {
-			currentWordComponents = append(currentWordComponents, component)
+		if len(currentLineComponents) == 0 {
+			currentLineComponents = append(currentLineComponents, component)
 			continue
 		}
 
-		// Calculate average height of current components
+		// Calculate average height of current line components
 		avgHeight := 0
-		for _, comp := range currentWordComponents {
+		for _, comp := range currentLineComponents {
 			avgHeight += comp.Height
 		}
-		avgHeight /= len(currentWordComponents)
+		avgHeight /= len(currentLineComponents)
 
-		lastComponent := currentWordComponents[len(currentWordComponents)-1]
-
-		// Check if this component belongs to the same word
-		// Criteria: similar Y position, reasonable X gap, similar height
-		yDiff := abs(component.Y - lastComponent.Y)
-		xGap := component.X - (lastComponent.X + lastComponent.Width)
-		heightDiff := abs(component.Height - avgHeight)
-
-		// Group if: on same line (small Y diff), close together (reasonable X gap), similar size
-		if yDiff <= avgHeight/2 && xGap <= avgHeight*4 && heightDiff <= avgHeight {
-			currentWordComponents = append(currentWordComponents, component)
-		} else {
-			// Finish current word and start new one
-			if len(currentWordComponents) > 0 {
-				wordBox := s.mergeComponents(currentWordComponents)
-				wordBoxes = append(wordBoxes, wordBox)
+		// Check if this component belongs to the same line
+		// Components belong to same line if they have similar Y positions
+		yOverlap := false
+		for _, lineComp := range currentLineComponents {
+			// Check for Y-coordinate overlap (allowing some tolerance)
+			tolerance := avgHeight / 2
+			if !(component.Y+component.Height < lineComp.Y-tolerance || 
+			     component.Y > lineComp.Y+lineComp.Height+tolerance) {
+				yOverlap = true
+				break
 			}
-			currentWordComponents = []BoundingBox{component}
+		}
+
+		if yOverlap {
+			currentLineComponents = append(currentLineComponents, component)
+		} else {
+			// Finish current line and start new one
+			if len(currentLineComponents) > 0 {
+				lineBox := s.mergeLineComponents(currentLineComponents)
+				lineBoxes = append(lineBoxes, lineBox)
+			}
+			currentLineComponents = []LineBoundingBox{component}
 		}
 	}
 
-	// Don't forget the last word
-	if len(currentWordComponents) > 0 {
-		wordBox := s.mergeComponents(currentWordComponents)
-		wordBoxes = append(wordBoxes, wordBox)
+	// Don't forget the last line
+	if len(currentLineComponents) > 0 {
+		lineBox := s.mergeLineComponents(currentLineComponents)
+		lineBoxes = append(lineBoxes, lineBox)
 	}
 
-	return wordBoxes
+	return lineBoxes
 }
 
-func (s *WordDetectionService) mergeComponents(components []BoundingBox) BoundingBox {
+func (s *WordDetectionService) mergeLineComponents(components []LineBoundingBox) LineBoundingBox {
 	if len(components) == 0 {
-		return BoundingBox{}
+		return LineBoundingBox{}
 	}
 
 	minX := components[0].X
@@ -257,7 +256,7 @@ func (s *WordDetectionService) mergeComponents(components []BoundingBox) Boundin
 		}
 	}
 
-	return BoundingBox{
+	return LineBoundingBox{
 		X:      minX,
 		Y:      minY,
 		Width:  maxX - minX,
@@ -265,46 +264,57 @@ func (s *WordDetectionService) mergeComponents(components []BoundingBox) Boundin
 	}
 }
 
-func (s *WordDetectionService) convertToGCVResponse(wordBoxes []BoundingBox, width, height int) models.GCVResponse {
-	var words []models.Word
+func (s *WordDetectionService) convertLinesToGCVResponse(lineBoxes []LineBoundingBox, width, height int) models.GCVResponse {
+	var paragraphs []models.Paragraph
 
-	// Convert each word box to GCV format
-	for i, box := range wordBoxes {
+	// Convert each line to a paragraph containing a single word
+	for i, lineBox := range lineBoxes {
+		// Create a single word that represents the entire line
 		word := models.Word{
 			BoundingBox: models.BoundingPoly{
 				Vertices: []models.Vertex{
-					{X: box.X, Y: box.Y},
-					{X: box.X + box.Width, Y: box.Y},
-					{X: box.X + box.Width, Y: box.Y + box.Height},
-					{X: box.X, Y: box.Y + box.Height},
+					{X: lineBox.X, Y: lineBox.Y},
+					{X: lineBox.X + lineBox.Width, Y: lineBox.Y},
+					{X: lineBox.X + lineBox.Width, Y: lineBox.Y + lineBox.Height},
+					{X: lineBox.X, Y: lineBox.Y + lineBox.Height},
 				},
 			},
 			Symbols: []models.Symbol{
 				{
 					BoundingBox: models.BoundingPoly{
 						Vertices: []models.Vertex{
-							{X: box.X, Y: box.Y},
-							{X: box.X + box.Width, Y: box.Y},
-							{X: box.X + box.Width, Y: box.Y + box.Height},
-							{X: box.X, Y: box.Y + box.Height},
+							{X: lineBox.X, Y: lineBox.Y},
+							{X: lineBox.X + lineBox.Width, Y: lineBox.Y},
+							{X: lineBox.X + lineBox.Width, Y: lineBox.Y + lineBox.Height},
+							{X: lineBox.X, Y: lineBox.Y + lineBox.Height},
 						},
 					},
-					Text: fmt.Sprintf("word_%d", i+1), // Placeholder text
+					Text: fmt.Sprintf("line_%d", i+1), // Placeholder text for the line
 					Property: &models.Property{
 						DetectedBreak: &models.DetectedBreak{
-							Type: "SPACE",
+							Type: "LINE_BREAK",
 						},
 					},
 				},
 			},
 		}
-		words = append(words, word)
+
+		// Create a paragraph for this line
+		paragraph := models.Paragraph{
+			BoundingBox: models.BoundingPoly{
+				Vertices: []models.Vertex{
+					{X: lineBox.X, Y: lineBox.Y},
+					{X: lineBox.X + lineBox.Width, Y: lineBox.Y},
+					{X: lineBox.X + lineBox.Width, Y: lineBox.Y + lineBox.Height},
+					{X: lineBox.X, Y: lineBox.Y + lineBox.Height},
+				},
+			},
+			Words: []models.Word{word},
+		}
+		paragraphs = append(paragraphs, paragraph)
 	}
 
-	// Group words into paragraphs (simple line-based grouping)
-	paragraphs := s.groupWordsIntoParagraphs(words)
-
-	// Create a single block containing all paragraphs
+	// Create a single block containing all paragraphs (lines)
 	block := models.Block{
 		BoundingBox: models.BoundingPoly{
 			Vertices: []models.Vertex{
@@ -330,223 +340,10 @@ func (s *WordDetectionService) convertToGCVResponse(wordBoxes []BoundingBox, wid
 			{
 				FullTextAnnotation: &models.FullTextAnnotation{
 					Pages: []models.Page{page},
-					Text:  "Custom word detection - text regions identified",
+					Text:  "Custom line detection - text lines identified",
 				},
 			},
 		},
-	}
-}
-
-func (s *WordDetectionService) groupWordsIntoParagraphs(words []models.Word) []models.Paragraph {
-	if len(words) == 0 {
-		return []models.Paragraph{}
-	}
-
-	// First, group words into lines based on Y-coordinate overlap
-	lines := s.groupWordsIntoLines(words)
-
-	// Then group lines into paragraphs based on spacing
-	return s.groupLinesIntoParagraphs(lines)
-}
-
-func (s *WordDetectionService) groupWordsIntoLines(words []models.Word) [][]models.Word {
-	if len(words) == 0 {
-		return [][]models.Word{}
-	}
-
-	// Sort words by Y coordinate first, then by X coordinate
-	sortedWords := make([]models.Word, len(words))
-	copy(sortedWords, words)
-	sort.Slice(sortedWords, func(i, j int) bool {
-		yI := sortedWords[i].BoundingBox.Vertices[0].Y
-		yJ := sortedWords[j].BoundingBox.Vertices[0].Y
-		if yI == yJ {
-			return sortedWords[i].BoundingBox.Vertices[0].X < sortedWords[j].BoundingBox.Vertices[0].X
-		}
-		return yI < yJ
-	})
-
-	var lines [][]models.Word
-
-	for _, word := range sortedWords {
-		wordTop := word.BoundingBox.Vertices[0].Y
-		wordBottom := word.BoundingBox.Vertices[2].Y
-		wordHeight := wordBottom - wordTop
-
-		// Find if this word belongs to an existing line
-		foundLine := false
-		for i, line := range lines {
-			if len(line) == 0 {
-				continue
-			}
-
-			// Calculate the Y-range of the current line
-			lineTop := line[0].BoundingBox.Vertices[0].Y
-			lineBottom := line[0].BoundingBox.Vertices[2].Y
-
-			for _, lineWord := range line {
-				wordLineTop := lineWord.BoundingBox.Vertices[0].Y
-				wordLineBottom := lineWord.BoundingBox.Vertices[2].Y
-				if wordLineTop < lineTop {
-					lineTop = wordLineTop
-				}
-				if wordLineBottom > lineBottom {
-					lineBottom = wordLineBottom
-				}
-			}
-
-			// Check if the word's Y-range overlaps with the line's Y-range
-			// Allow some tolerance (half the word height) to account for slight misalignment
-			tolerance := wordHeight / 2
-			wordOverlapsLine := wordBottom >= lineTop-tolerance && wordTop <= lineBottom+tolerance
-
-			if wordOverlapsLine {
-				lines[i] = append(lines[i], word)
-				foundLine = true
-				break
-			}
-		}
-
-		if !foundLine {
-			// Create a new line for this word
-			lines = append(lines, []models.Word{word})
-		}
-	}
-
-	// Sort words within each line by X coordinate
-	for i := range lines {
-		sort.Slice(lines[i], func(j, k int) bool {
-			return lines[i][j].BoundingBox.Vertices[0].X < lines[i][k].BoundingBox.Vertices[0].X
-		})
-	}
-
-	return lines
-}
-
-func (s *WordDetectionService) groupLinesIntoParagraphs(lines [][]models.Word) []models.Paragraph {
-	if len(lines) == 0 {
-		return []models.Paragraph{}
-	}
-
-	var paragraphs []models.Paragraph
-	var currentParagraphLines [][]models.Word
-
-	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-
-		if len(currentParagraphLines) == 0 {
-			currentParagraphLines = append(currentParagraphLines, line)
-			continue
-		}
-
-		// Calculate the vertical gap between the last line and current line
-		lastLine := currentParagraphLines[len(currentParagraphLines)-1]
-		if len(lastLine) == 0 {
-			currentParagraphLines = append(currentParagraphLines, line)
-			continue
-		}
-
-		// Get the bottom Y of the last line
-		lastLineBottom := 0
-		for _, word := range lastLine {
-			wordBottom := word.BoundingBox.Vertices[2].Y
-			if wordBottom > lastLineBottom {
-				lastLineBottom = wordBottom
-			}
-		}
-
-		// Get the top Y of the current line
-		currentLineTop := line[0].BoundingBox.Vertices[0].Y
-		for _, word := range line {
-			wordTop := word.BoundingBox.Vertices[0].Y
-			if wordTop < currentLineTop {
-				currentLineTop = wordTop
-			}
-		}
-
-		// Estimate line height from the current line
-		lineHeight := 0
-		for _, word := range line {
-			wordHeight := word.BoundingBox.Vertices[2].Y - word.BoundingBox.Vertices[0].Y
-			if wordHeight > lineHeight {
-				lineHeight = wordHeight
-			}
-		}
-
-		verticalGap := currentLineTop - lastLineBottom
-
-		// Start new paragraph if gap is more than 2x line height
-		if verticalGap > lineHeight*2 {
-			// Finish current paragraph
-			paragraphWords := s.flattenLines(currentParagraphLines)
-			if len(paragraphWords) > 0 {
-				paragraph := s.createParagraphFromWords(paragraphWords)
-				paragraphs = append(paragraphs, paragraph)
-			}
-			currentParagraphLines = [][]models.Word{line}
-		} else {
-			currentParagraphLines = append(currentParagraphLines, line)
-		}
-	}
-
-	// Don't forget the last paragraph
-	if len(currentParagraphLines) > 0 {
-		paragraphWords := s.flattenLines(currentParagraphLines)
-		if len(paragraphWords) > 0 {
-			paragraph := s.createParagraphFromWords(paragraphWords)
-			paragraphs = append(paragraphs, paragraph)
-		}
-	}
-
-	return paragraphs
-}
-
-func (s *WordDetectionService) flattenLines(lines [][]models.Word) []models.Word {
-	var words []models.Word
-	for _, line := range lines {
-		words = append(words, line...)
-	}
-	return words
-}
-
-func (s *WordDetectionService) createParagraphFromWords(words []models.Word) models.Paragraph {
-	if len(words) == 0 {
-		return models.Paragraph{}
-	}
-
-	// Calculate bounding box for the entire paragraph
-	minX := words[0].BoundingBox.Vertices[0].X
-	minY := words[0].BoundingBox.Vertices[0].Y
-	maxX := words[0].BoundingBox.Vertices[2].X
-	maxY := words[0].BoundingBox.Vertices[2].Y
-
-	for _, word := range words[1:] {
-		if word.BoundingBox.Vertices[0].X < minX {
-			minX = word.BoundingBox.Vertices[0].X
-		}
-		if word.BoundingBox.Vertices[0].Y < minY {
-			minY = word.BoundingBox.Vertices[0].Y
-		}
-		if word.BoundingBox.Vertices[2].X > maxX {
-			maxX = word.BoundingBox.Vertices[2].X
-		}
-		if word.BoundingBox.Vertices[2].Y > maxY {
-			maxY = word.BoundingBox.Vertices[2].Y
-		}
-	}
-
-	return models.Paragraph{
-		BoundingBox: models.BoundingPoly{
-			Vertices: []models.Vertex{
-				{X: minX, Y: minY},
-				{X: maxX, Y: minY},
-				{X: maxX, Y: maxY},
-				{X: minX, Y: maxY},
-			},
-		},
-		Words: words,
 	}
 }
 

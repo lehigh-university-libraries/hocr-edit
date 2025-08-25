@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
 	"io"
 	"log/slog"
 	"math"
@@ -70,30 +69,29 @@ func (s *LLMOCRService) ProcessImage(imagePath string) (models.GCVResponse, erro
 		return models.GCVResponse{}, fmt.Errorf("failed to detect boundary boxes: %w", err)
 	}
 
-	// Extract word regions and create stitched image
-	stitchedImagePath, wordOrder, err := s.createStitchedWordImage(imagePath, boundaryBoxResponse)
+	// Create overlay image with detected text clearly visible
+	overlayImagePath, err := s.createTextOverlayImage(imagePath, boundaryBoxResponse)
 	if err != nil {
-		slog.Warn("Failed to create stitched image, using boundary box detection only", "error", err)
+		slog.Warn("Failed to create overlay image, using boundary box detection only", "error", err)
 		return boundaryBoxResponse, nil
 	}
-	//	defer os.Remove(stitchedImagePath) // Clean up temp file
+	// defer os.Remove(overlayImagePath) // Clean up temp file
 
-	slog.Info("Sending stitched image to LLM", "image_path", stitchedImagePath)
+	slog.Info("Sending overlay image to LLM", "image_path", overlayImagePath)
 
-	// Get text from LLM using the stitched image
-	recognizedText, err := s.getTextFromLLM(stitchedImagePath)
+	// Get text from LLM by reading the overlaid text
+	recognizedText, err := s.getTextFromLLM(overlayImagePath)
 	if err != nil {
-		slog.Warn("LLM text recognition failed, using boundary box detection only", "error", err)
+		slog.Warn("LLM text reading failed, using boundary box detection only", "error", err)
 		return boundaryBoxResponse, nil
 	}
 
 	slog.Info("LLM returned text", "text", recognizedText, "text_length", len(recognizedText))
 
-	// Map the recognized text back to the original boundary boxes
-	correctedResponse := s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder)
-
-	slog.Info("Completed LLM OCR processing", "original_words", len(wordOrder), "corrected_response_ready", true)
-	return correctedResponse, nil
+	// For ProcessImage, we still need to return a GCVResponse structure
+	// Fall back to original boundary box response since this method expects that format
+	slog.Info("Completed LLM text reading processing, returning original boundary box response")
+	return boundaryBoxResponse, nil
 }
 
 func (s *LLMOCRService) ProcessImageToHOCR(imagePath string) (string, error) {
@@ -105,46 +103,186 @@ func (s *LLMOCRService) ProcessImageToHOCR(imagePath string) (string, error) {
 
 	slog.Info("Detected word boundary boxes", "word_count", s.countWords(boundaryBoxResponse))
 
-	// Extract word regions and create stitched image
-	stitchedImagePath, wordOrder, err := s.createStitchedWordImage(imagePath, boundaryBoxResponse)
+	// Create overlay image with detected text clearly visible
+	overlayImagePath, err := s.createTextOverlayImage(imagePath, boundaryBoxResponse)
 	if err != nil {
-		slog.Warn("Failed to create stitched image, using boundary box detection only", "error", err)
+		slog.Warn("Failed to create overlay image, using boundary box detection only", "error", err)
 		converter := hocr.NewConverter()
 		return converter.ConvertToHOCR(boundaryBoxResponse)
 	}
-	defer os.Remove(stitchedImagePath) // Clean up temp file
+	// defer os.Remove(overlayImagePath) // Clean up temp file
 
-	slog.Info("Created stitched word image", "path", stitchedImagePath, "word_count", len(wordOrder))
-	slog.Info("Sending stitched image to LLM for text recognition", "image_path", stitchedImagePath)
+	slog.Info("Created text overlay image", "path", overlayImagePath)
+	slog.Info("Sending overlay image to LLM for text reading", "image_path", overlayImagePath)
 
-	// Get text from LLM using the stitched image
-	recognizedText, err := s.getTextFromLLM(stitchedImagePath)
+	// Get text from LLM by reading the overlaid text
+	recognizedText, err := s.getTextFromLLM(overlayImagePath)
 	if err != nil {
-		slog.Warn("LLM text recognition failed, using boundary box detection only", "error", err)
+		slog.Warn("LLM text reading failed, using boundary box detection only", "error", err)
 		converter := hocr.NewConverter()
 		return converter.ConvertToHOCR(boundaryBoxResponse)
 	}
 
-	slog.Info("LLM text recognition completed", "text", recognizedText, "text_length", len(recognizedText))
+	slog.Info("LLM text reading completed", "text", recognizedText, "text_length", len(recognizedText))
 
-	// Map the recognized text back to the original boundary boxes
-	correctedResponse := s.mapTextToWordBoxes(recognizedText, boundaryBoxResponse, wordOrder)
+	// Fix common CSS class name issues in ChatGPT's response
+	recognizedText = strings.ReplaceAll(recognizedText, "ocrx line", "ocrx_line")
+	recognizedText = strings.ReplaceAll(recognizedText, "ocr line", "ocrx_line")
 
-	slog.Info("Text mapped back to word boxes, converting to hOCR", "corrected_words", s.countWords(correctedResponse))
+	// The LLM output is already complete hOCR markup, just wrap it in basic hOCR structure
+	hocrDocument := fmt.Sprintf(`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<title></title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name='ocr-system' content='hocr-edit with LLM OCR' />
+</head>
+<body>
+<div class='ocr_page' id='page_1'>
+%s
+</div>
+</body>
+</html>`, recognizedText)
 
-	// Convert to hOCR
-	converter := hocr.NewConverter()
-	return converter.ConvertToHOCR(correctedResponse)
+	return hocrDocument, nil
 }
 
-// WordInfo stores information about each word for mapping back to boundaries
-type WordInfo struct {
-	WordIndex    int
-	ParagraphIdx int
-	WordIdx      int
-	BoundingBox  models.BoundingPoly
+// LineInfo stores information about each line for mapping back to boundaries
+type LineInfo struct {
+	LineIndex   int
+	BoundingBox models.BoundingPoly
 	OriginalText string
 }
+
+// groupWordsByLine groups words by their Y position to detect actual text lines
+func (s *LLMOCRService) groupWordsByLine(words []models.Word) [][]models.Word {
+	if len(words) == 0 {
+		return [][]models.Word{}
+	}
+	
+	// Sort words by Y position first
+	sort.Slice(words, func(i, j int) bool {
+		yI := words[i].BoundingBox.Vertices[0].Y
+		yJ := words[j].BoundingBox.Vertices[0].Y
+		return yI < yJ
+	})
+	
+	var lines [][]models.Word
+	currentLine := []models.Word{words[0]}
+	
+	// Group words that have similar Y positions into the same line
+	// Use a tolerance based on average word height
+	tolerance := s.calculateLineHeightTolerance(words)
+	
+	for i := 1; i < len(words); i++ {
+		currentY := words[i].BoundingBox.Vertices[0].Y
+		previousY := words[i-1].BoundingBox.Vertices[0].Y
+		
+		if abs(currentY-previousY) <= tolerance {
+			// Same line
+			currentLine = append(currentLine, words[i])
+		} else {
+			// New line
+			lines = append(lines, currentLine)
+			currentLine = []models.Word{words[i]}
+		}
+	}
+	
+	// Don't forget the last line
+	if len(currentLine) > 0 {
+		lines = append(lines, currentLine)
+	}
+	
+	// Sort words within each line by X position (left to right)
+	for i := range lines {
+		sort.Slice(lines[i], func(j, k int) bool {
+			xJ := lines[i][j].BoundingBox.Vertices[0].X
+			xK := lines[i][k].BoundingBox.Vertices[0].X
+			return xJ < xK
+		})
+	}
+	
+	return lines
+}
+
+// calculateLineHeightTolerance calculates a tolerance for grouping words into lines
+func (s *LLMOCRService) calculateLineHeightTolerance(words []models.Word) int {
+	if len(words) == 0 {
+		return 10 // Default tolerance
+	}
+	
+	var heights []int
+	for _, word := range words {
+		if len(word.BoundingBox.Vertices) >= 4 {
+			height := word.BoundingBox.Vertices[2].Y - word.BoundingBox.Vertices[0].Y
+			heights = append(heights, height)
+		}
+	}
+	
+	if len(heights) == 0 {
+		return 10 // Default tolerance
+	}
+	
+	// Calculate average height
+	sum := 0
+	for _, h := range heights {
+		sum += h
+	}
+	avgHeight := sum / len(heights)
+	
+	// Use half the average height as tolerance
+	tolerance := avgHeight / 2
+	if tolerance < 5 {
+		tolerance = 5 // Minimum tolerance
+	}
+	
+	return tolerance
+}
+
+// calculateLineBoundingBox creates a bounding box that encompasses all words in a line
+func (s *LLMOCRService) calculateLineBoundingBox(words []models.Word) models.BoundingPoly {
+	if len(words) == 0 {
+		return models.BoundingPoly{}
+	}
+	
+	minX := words[0].BoundingBox.Vertices[0].X
+	minY := words[0].BoundingBox.Vertices[0].Y
+	maxX := words[0].BoundingBox.Vertices[2].X
+	maxY := words[0].BoundingBox.Vertices[2].Y
+	
+	// Find the overall bounding box for all words in the line
+	for _, word := range words {
+		if len(word.BoundingBox.Vertices) >= 4 {
+			wordMinX := word.BoundingBox.Vertices[0].X
+			wordMinY := word.BoundingBox.Vertices[0].Y
+			wordMaxX := word.BoundingBox.Vertices[2].X
+			wordMaxY := word.BoundingBox.Vertices[2].Y
+			
+			if wordMinX < minX {
+				minX = wordMinX
+			}
+			if wordMinY < minY {
+				minY = wordMinY
+			}
+			if wordMaxX > maxX {
+				maxX = wordMaxX
+			}
+			if wordMaxY > maxY {
+				maxY = wordMaxY
+			}
+		}
+	}
+	
+	return models.BoundingPoly{
+		Vertices: []models.Vertex{
+			{X: minX, Y: minY},
+			{X: maxX, Y: minY},
+			{X: maxX, Y: maxY},
+			{X: minX, Y: maxY},
+		},
+	}
+}
+
 
 func (s *LLMOCRService) countWords(response models.GCVResponse) int {
 	count := 0
@@ -161,149 +299,177 @@ func (s *LLMOCRService) countWords(response models.GCVResponse) int {
 	return count
 }
 
-func (s *LLMOCRService) createStitchedWordImage(imagePath string, response models.GCVResponse) (string, []WordInfo, error) {
-	// Load original image
-	originalFile, err := os.Open(imagePath)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to open original image: %w", err)
-	}
-	defer originalFile.Close()
-
-	_, _, err = image.Decode(originalFile)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to decode original image: %w", err)
-	}
-
-	// Collect all words with their positions
-	var wordInfos []WordInfo
-	wordIndex := 0
+func (s *LLMOCRService) createTextOverlayImage(imagePath string, response models.GCVResponse) (string, error) {
+	// Create a stitched image with hOCR tags and line images
+	tempDir := "/tmp"
+	baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
+	stitchedPath := filepath.Join(tempDir, fmt.Sprintf("stitched_%s_%d.png", baseName, time.Now().Unix()))
 
 	if len(response.Responses) == 0 || response.Responses[0].FullTextAnnotation == nil {
-		return "", nil, fmt.Errorf("no text annotation in response")
+		return "", fmt.Errorf("no text annotation in response")
 	}
 
+	// Create individual components for stitching
+	var componentPaths []string
+	
+	// Process each detected line
+	lineNumber := 1
 	for _, page := range response.Responses[0].FullTextAnnotation.Pages {
 		for _, block := range page.Blocks {
-			for pIdx, paragraph := range block.Paragraphs {
-				for wIdx, word := range paragraph.Words {
-					wordInfo := WordInfo{
-						WordIndex:    wordIndex,
-						ParagraphIdx: pIdx,
-						WordIdx:      wIdx,
-						BoundingBox:  word.BoundingBox,
-						OriginalText: fmt.Sprintf("word_%d", wordIndex+1), // Placeholder
+			for _, paragraph := range block.Paragraphs {
+				// Group words by their Y position to detect actual text lines
+				lines := s.groupWordsByLine(paragraph.Words)
+				
+				for _, wordLine := range lines {
+					if len(wordLine) == 0 {
+						continue
 					}
-					wordInfos = append(wordInfos, wordInfo)
-					wordIndex++
+					
+					// Get line bounding box
+					lineBBox := s.calculateLineBoundingBox(wordLine)
+					if len(lineBBox.Vertices) < 4 {
+						continue
+					}
+					
+					// Create opening span tag image
+					openingTag := fmt.Sprintf(`<span class='ocrx_line' title='bbox %d %d %d %d'>
+					    <span class='ocrx_word' id='word_1' title='bbox %d %d %d %d'>`, 
+						lineBBox.Vertices[0].X, lineBBox.Vertices[0].Y, 
+						lineBBox.Vertices[2].X, lineBBox.Vertices[2].Y,
+  					lineBBox.Vertices[0].X, lineBBox.Vertices[0].Y,
+						lineBBox.Vertices[2].X, lineBBox.Vertices[2].Y)
+					openingImagePath, err := s.createTextImage(openingTag, tempDir, fmt.Sprintf("opening_%d", lineNumber))
+					if err == nil {
+						componentPaths = append(componentPaths, openingImagePath)
+					}
+					
+					// Extract line image from original
+					lineImagePath, err := s.extractLineImage(imagePath, lineBBox, tempDir, fmt.Sprintf("line_%d", lineNumber))
+					if err == nil {
+						componentPaths = append(componentPaths, lineImagePath)
+					}
+					
+					// Create closing span tag image
+					closingImagePath, err := s.createTextImage("</span></span>", tempDir, fmt.Sprintf("closing_%d", lineNumber))
+					if err == nil {
+						componentPaths = append(componentPaths, closingImagePath)
+					}
+					
+					lineNumber++
 				}
 			}
 		}
 	}
 
-	// Sort words by reading order (top to bottom, left to right)
-	sort.Slice(wordInfos, func(i, j int) bool {
-		// Get Y positions (top of bounding box)
-		yI := wordInfos[i].BoundingBox.Vertices[0].Y
-		yJ := wordInfos[j].BoundingBox.Vertices[0].Y
-
-		// If on roughly the same line (within some threshold), sort by X
-		heightI := wordInfos[i].BoundingBox.Vertices[2].Y - yI
-		threshold := heightI / 2
-		if abs(yI-yJ) < threshold {
-			return wordInfos[i].BoundingBox.Vertices[0].X < wordInfos[j].BoundingBox.Vertices[0].X
-		}
-		return yI < yJ
-	})
-
-	// Create stitched image using ImageMagick
-	tempDir := "/tmp"
-	baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
-	stitchedPath := filepath.Join(tempDir, fmt.Sprintf("stitched_%s_%d.png", baseName, time.Now().Unix()))
-
-	err = s.createStitchedImageWithImageMagick(imagePath, wordInfos, stitchedPath)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to create stitched image: %w", err)
+	if len(componentPaths) == 0 {
+		return "", fmt.Errorf("no valid components were created")
 	}
 
-	return stitchedPath, wordInfos, nil
-}
-
-func (s *LLMOCRService) createStitchedImageWithImageMagick(imagePath string, wordInfos []WordInfo, outputPath string) error {
-	// Create individual word images first, then stitch them together
-	tempDir := "/tmp"
-	var wordImagePaths []string
-
-	for i, wordInfo := range wordInfos {
-		bbox := wordInfo.BoundingBox
-		if len(bbox.Vertices) < 4 {
-			continue // Skip malformed bounding boxes
-		}
-
-		// Calculate crop dimensions
-		minX := bbox.Vertices[0].X
-		minY := bbox.Vertices[0].Y
-		maxX := bbox.Vertices[2].X
-		maxY := bbox.Vertices[2].Y
-
-		width := maxX - minX
-		height := maxY - minY
-
-		if width <= 0 || height <= 0 {
-			continue // Skip invalid dimensions
-		}
-
-		// Add some padding around each word
-		padding := 5
-		cropX := max(0, minX-padding)
-		cropY := max(0, minY-padding)
-		cropWidth := width + 2*padding
-		cropHeight := height + 2*padding
-
-		// Create individual word image
-		wordImagePath := filepath.Join(tempDir, fmt.Sprintf("word_%d_%d.png", time.Now().Unix(), i))
-
-		cmd := exec.Command("magick", imagePath,
-			"-crop", fmt.Sprintf("%dx%d+%d+%d", cropWidth, cropHeight, cropX, cropY),
-			"+repage", // Remove the virtual canvas
-			wordImagePath)
-
-		if err := cmd.Run(); err != nil {
-			slog.Warn("Failed to extract word image", "word_index", i, "error", err)
-			continue
-		}
-
-		wordImagePaths = append(wordImagePaths, wordImagePath)
-	}
-
-	if len(wordImagePaths) == 0 {
-		return fmt.Errorf("no valid word images were extracted")
-	}
-
-	// Stitch all word images together vertically
+	// Stitch all components together vertically
 	args := []string{}
-	args = append(args, wordImagePaths...)
+	args = append(args, componentPaths...)
 	args = append(args, "-append") // Vertical append
-	args = append(args, outputPath)
+	args = append(args, stitchedPath)
 
 	cmd := exec.Command("magick", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 
-	// Clean up individual word images
-	for _, wordImagePath := range wordImagePaths {
-		os.Remove(wordImagePath)
+	// Clean up component images
+	for _, componentPath := range componentPaths {
+		os.Remove(componentPath)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to stitch word images: %w", err)
+		slog.Error("Failed to stitch components", "error", err, "stderr", stderr.String(), "cmd", cmd.String())
+		return "", fmt.Errorf("failed to stitch components: %w", err)
 	}
 
-	slog.Info("Successfully created stitched image", "path", outputPath, "word_count", len(wordImagePaths))
-	return nil
+	slog.Info("Successfully created stitched hOCR image", "path", stitchedPath, "components", len(componentPaths))
+	return stitchedPath, nil
 }
 
+// createTextImage creates a simple image with just the text
+func (s *LLMOCRService) createTextImage(text, tempDir, filename string) (string, error) {
+	outputPath := filepath.Join(tempDir, fmt.Sprintf("%s_%d.png", filename, time.Now().Unix()))
+	
+	cmd := exec.Command("magick",
+		"-size", "2000x200",
+		"xc:white",
+		"-fill", "black",
+		"-font", "DejaVu-Sans-Mono",
+		"-pointsize", "50",
+		"-draw", fmt.Sprintf(`text 10,70 "%s"`, text),
+		outputPath)
+	
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	
+	if err := cmd.Run(); err != nil {
+		slog.Error("Failed to create text image", "error", err, "stderr", stderr.String(), "cmd", cmd.String())
+		return "", fmt.Errorf("failed to create text image: %w", err)
+	}
+	
+	return outputPath, nil
+}
+
+// extractLineImage extracts a line region from the original image
+func (s *LLMOCRService) extractLineImage(imagePath string, bbox models.BoundingPoly, tempDir, filename string) (string, error) {
+	if len(bbox.Vertices) < 4 {
+		return "", fmt.Errorf("invalid bounding box")
+	}
+	
+	outputPath := filepath.Join(tempDir, fmt.Sprintf("%s_%d.png", filename, time.Now().Unix()))
+	
+	minX := bbox.Vertices[0].X
+	minY := bbox.Vertices[0].Y
+	maxX := bbox.Vertices[2].X
+	maxY := bbox.Vertices[2].Y
+	
+	width := maxX - minX
+	height := maxY - minY
+	
+	if width <= 0 || height <= 0 {
+		return "", fmt.Errorf("invalid dimensions")
+	}
+	
+	// Add some padding
+	padding := 2
+	cropX := max(0, minX-padding)
+	cropY := max(0, minY-padding)
+	cropWidth := width + 2*padding
+	cropHeight := height + 2*padding
+	
+	cmd := exec.Command("magick", imagePath,
+		"-crop", fmt.Sprintf("%dx%d+%d+%d", cropWidth, cropHeight, cropX, cropY),
+		"+repage",
+		outputPath)
+	
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	
+	if err := cmd.Run(); err != nil {
+		slog.Error("Failed to extract line image", "error", err, "stderr", stderr.String(), "cmd", cmd.String())
+		return "", fmt.Errorf("failed to extract line image: %w", err)
+	}
+	
+	return outputPath, nil
+}
+
+
 func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error) {
-	// Get image as base64
-	imageBase64, err := s.getImageAsBase64(stitchedImagePath)
+	// Preprocess the stitched image for better LLM recognition
+	enhancedImagePath, err := s.enhanceImageForLLM(stitchedImagePath)
+	if err != nil {
+		slog.Warn("Failed to enhance image for LLM, using original", "error", err)
+		enhancedImagePath = stitchedImagePath
+	} else {
+		// defer os.Remove(enhancedImagePath) // Clean up enhanced image
+	}
+
+	// Get enhanced image as base64
+	imageBase64, err := s.getImageAsBase64(enhancedImagePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode image: %w", err)
 	}
@@ -317,12 +483,25 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 				Content: []Content{
 					{
 						Type: "text",
-						Text: `Extract all text from this image.
-						Each line in the image has one to five word(s).
-						In your response, return only the text, one line per line, in the order they appear from top to bottom.
-						Do not add any explanations or formatting.
-						None of the lines repeat, so if you're going to repeat the same line twice, try harder.
-						Though it's possible the same line is repeated later in the document, the likelyhood of two lines being the same is very unlikely. `,
+						Text: `Read and transcribe all the hOCR markup that has been overlaid on this image.
+						The image contains complete hOCR markup overlaid in a clear, readable font.
+						Each line shows hOCR tags with text content like:
+						<span class='ocrx_line' id='line_1' title='bbox=x y w h'>
+					    <span class='ocrx_word' id='word_1' title='bbox x y w h'>
+						followed by an image that needs transcribed.
+						When you print you span tags, the span must always start with
+						"<span class='ocrx_line'" OR "<span class='ocrx_word'"
+					being sure to include the underscore.
+						After the image that is transcribed, a </span></span> tag is shown
+						You must transcribe BOTH the hOCR tags AND the text content inside them.
+						In your response, return the complete hOCR markup exactly as you see it overlaid on the image, including:
+						- The opening tags with all attributes (class, bbox, etc.)
+						- The actual text content between the opening and closing tags
+						- The closing tags
+						Read each line of markup in order from top to bottom.
+						If the image inside a <span> tag has no legible text, do not print the <span> at all. We do not want blank text boxes.
+						Do not add any explanations, formatting, or modifications.
+						Simply transcribe the complete hOCR markup (tags + content) you see overlaid on the image exactly as it appears.`,
 					},
 					{
 						Type: "image_url",
@@ -350,20 +529,25 @@ func (s *LLMOCRService) getTextFromLLM(stitchedImagePath string) (string, error)
 	return cleanResponse, nil
 }
 
-func (s *LLMOCRService) mapTextToWordBoxes(recognizedText string, originalResponse models.GCVResponse, wordOrder []WordInfo) models.GCVResponse {
-	// Split recognized text into individual words
-	words := strings.Split(strings.TrimSpace(recognizedText), "\n")
-
-	// Clean up words (remove extra whitespace)
-	var cleanWords []string
-	for _, word := range words {
-		word = strings.TrimSpace(word)
-		if word != "" {
-			cleanWords = append(cleanWords, word)
+func (s *LLMOCRService) mapTextToOriginalStructure(recognizedText string, originalResponse models.GCVResponse) models.GCVResponse {
+	// Parse the recognized text to extract line content
+	lines := strings.Split(strings.TrimSpace(recognizedText), "\n")
+	
+	var extractedLines []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Extract text after "LINE X: " prefix
+		if strings.Contains(line, ": ") {
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) == 2 {
+				extractedLines = append(extractedLines, strings.TrimSpace(parts[1]))
+			}
+		} else if line != "" {
+			extractedLines = append(extractedLines, line)
 		}
 	}
 
-	slog.Info("Mapping text to word boxes", "recognized_words", len(cleanWords), "original_words", len(wordOrder))
+	slog.Info("Mapping extracted text to original structure", "extracted_lines", len(extractedLines))
 
 	// Create a new response with the same structure but updated text
 	newResponse := originalResponse
@@ -372,25 +556,33 @@ func (s *LLMOCRService) mapTextToWordBoxes(recognizedText string, originalRespon
 		return originalResponse
 	}
 
-	// Map words back to their original positions
-	wordIdx := 0
+	// Map extracted lines back to the original structure
+	lineIdx := 0
 	for pageIdx := range newResponse.Responses[0].FullTextAnnotation.Pages {
 		for blockIdx := range newResponse.Responses[0].FullTextAnnotation.Pages[pageIdx].Blocks {
 			for paragraphIdx := range newResponse.Responses[0].FullTextAnnotation.Pages[pageIdx].Blocks[blockIdx].Paragraphs {
-				for wIdx := range newResponse.Responses[0].FullTextAnnotation.Pages[pageIdx].Blocks[blockIdx].Paragraphs[paragraphIdx].Words {
-					if wordIdx < len(cleanWords) {
-						// Update the word text in all symbols
-						word := &newResponse.Responses[0].FullTextAnnotation.Pages[pageIdx].Blocks[blockIdx].Paragraphs[paragraphIdx].Words[wIdx]
-						recognizedWord := cleanWords[wordIdx]
-
-						// Clear existing symbols and create new ones
+				paragraph := &newResponse.Responses[0].FullTextAnnotation.Pages[pageIdx].Blocks[blockIdx].Paragraphs[paragraphIdx]
+				
+				// Group words by line and assign extracted text
+				lines := s.groupWordsByLine(paragraph.Words)
+				for _, wordLine := range lines {
+					if lineIdx < len(extractedLines) && len(wordLine) > 0 {
+						extractedText := extractedLines[lineIdx]
+						
+						// Replace the first word's content with the extracted line text
+						word := &wordLine[0]
 						word.Symbols = []models.Symbol{
 							{
-								Text:        recognizedWord,
-								BoundingBox: word.BoundingBox, // Use the word's bounding box for the symbol too
+								Text:        extractedText,
+								BoundingBox: word.BoundingBox,
+								Property: &models.Property{
+									DetectedBreak: &models.DetectedBreak{
+										Type: "LINE_BREAK",
+									},
+								},
 							},
 						}
-						wordIdx++
+						lineIdx++
 					}
 				}
 			}
@@ -398,7 +590,7 @@ func (s *LLMOCRService) mapTextToWordBoxes(recognizedText string, originalRespon
 	}
 
 	// Update the full text annotation
-	allText := strings.Join(cleanWords, " ")
+	allText := strings.Join(extractedLines, "\n")
 	newResponse.Responses[0].FullTextAnnotation.Text = allText
 
 	return newResponse
@@ -417,6 +609,29 @@ func (s *LLMOCRService) getModel() string {
 		return "gpt-5"
 	}
 	return model
+}
+
+// enhanceImageForLLM applies the same preprocessing as word detection for better text recognition
+func (s *LLMOCRService) enhanceImageForLLM(imagePath string) (string, error) {
+	tempDir := "/tmp"
+	baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
+	enhancedPath := fmt.Sprintf("%s/enhanced_llm_%s.jpg", tempDir, strings.ReplaceAll(baseName, "/", "_"))
+
+	// Use the same gentle enhancement as word detection
+	cmd := exec.Command("magick", imagePath,
+		"-colorspace", "Gray",
+		"-contrast-stretch", "0.15x0.05%",
+		"-sharpen", "0x1",
+		"-threshold", "75%",
+		enhancedPath)
+	
+	slog.Info("Enhancing stitched image for LLM", "input", imagePath, "output", enhancedPath)
+	
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("imagemagick enhancement failed: %w", err)
+	}
+
+	return enhancedPath, nil
 }
 
 func (s *LLMOCRService) getImageAsBase64(imagePath string) (string, error) {

@@ -2,7 +2,10 @@ FROM ghcr.io/lehigh-university-libraries/scyllaridae-imagemagick:main
 
 WORKDIR /app
 
-RUN apk add --no-cache go && \
+RUN apk add --no-cache \
+    fontconfig \
+    ttf-dejavu \
+    go && \
   adduser -S -G nobody -u 8888 hocr
 
 COPY --chown=hocr:hocr main.go go.* docker-entrypoint.sh ./

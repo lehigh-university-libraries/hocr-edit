@@ -593,9 +593,6 @@ func (h *Handler) HandleHOCRParse(w http.ResponseWriter, r *http.Request) {
 
 // convertImageViaHoudini converts JP2/TIFF images to JPG using Houdini service
 func (h *Handler) convertImageViaHoudini(imageData []byte, contentType string) ([]byte, error) {
-	if contentType == "application/octet-stream" {
-		contentType = "image/jp2"
-	}
 
 	hash := md5.Sum(imageData)
 	cacheKey := hex.EncodeToString(hash[:])

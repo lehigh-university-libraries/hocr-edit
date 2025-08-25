@@ -84,13 +84,13 @@ func (s *Service) ProcessImageToHOCR(imagePath string) (string, error) {
 	if s.useLLMOCR {
 		return s.llmOCRSvc.ProcessImageToHOCR(imagePath)
 	}
-	
+
 	// Fall back to normal processing + conversion
 	gcvResponse, err := s.ProcessImage(imagePath)
 	if err != nil {
 		return "", err
 	}
-	
+
 	converter := hocr.NewConverter()
 	return converter.ConvertToHOCR(gcvResponse)
 }

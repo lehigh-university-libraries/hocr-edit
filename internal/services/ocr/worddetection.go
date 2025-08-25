@@ -398,7 +398,7 @@ func (s *WordDetectionService) groupWordsIntoLines(words []models.Word) [][]mode
 			// Check if the word's Y-range overlaps with the line's Y-range
 			// Allow some tolerance (half the word height) to account for slight misalignment
 			tolerance := wordHeight / 2
-			wordOverlapsLine := !(wordBottom < lineTop-tolerance || wordTop > lineBottom+tolerance)
+			wordOverlapsLine := wordBottom >= lineTop-tolerance && wordTop <= lineBottom+tolerance
 
 			if wordOverlapsLine {
 				lines[i] = append(lines[i], word)
